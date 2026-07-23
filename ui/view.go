@@ -70,23 +70,23 @@ func (m Model) View() string {
 			return b.String()
 		}
 
-		// Total Data Progress Bar
-		totalBytesRatio := float64(0)
-		if m.TotalBytes > 0 {
-			totalBytesRatio = float64(m.UploadedBytes+m.SkippedBytes) / float64(m.TotalBytes)
-		}
-		if totalBytesRatio > 1.0 {
-			totalBytesRatio = 1.0
-		}
+		// Total Data Progress Bar — transferred (committed + in-flight) + skipped.
+		transferred := m.liveTransferredBytes() + m.SkippedBytes
+		totalBytesRatio := m.totalBarRatio()
 
+		// Show "measuring…" during the warmup window instead of a misleading 0.
 		speedText := formatSpeed(m.SpeedBps)
-		etaText := formatETA(m.TotalBytes-(m.UploadedBytes+m.SkippedBytes), m.SpeedBps)
+		etaText := formatETA(m.TotalBytes-transferred, m.SpeedBps)
+		if m.SpeedBps <= 0 && m.State == StateUploading && time.Since(m.StartTime) < 8*time.Second {
+			speedText = "measuring…"
+			etaText = "--:--"
+		}
 
 		dataPanel := fmt.Sprintf(
 			"DIRTY POP (DATA) [%s] %5.1f%%\n%s / %s (Speed: %s | ETA: %s)",
 			m.TotalBytesBar.ViewAs(totalBytesRatio),
 			totalBytesRatio*100,
-			formatBytes(m.UploadedBytes+m.SkippedBytes),
+			formatBytes(transferred),
 			formatBytes(m.TotalBytes),
 			speedText,
 			etaText,
@@ -135,7 +135,7 @@ func (m Model) View() string {
 		// 'N SYNC Trivia Box
 		if len(m.TriviaList) > 0 {
 			triviaFact := m.TriviaList[m.TriviaIndex%len(m.TriviaList)]
-			triviaHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF69B4")).Render(fmt.Sprintf("💡 'N SYNC TRIVIA BREAK (%d/%d)", m.TriviaIndex+1, len(m.TriviaList)))
+			triviaHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF69B4")).Render("💡 'N SYNC TRIVIA BREAK")
 			triviaText := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAFAFA")).Render(triviaFact)
 
 			triviaBoxStyle := lipgloss.NewStyle().
@@ -188,7 +188,7 @@ func (m Model) View() string {
 			line := fmt.Sprintf("%s  %s [%s] %5.1f%% %-24s (%s / %s)",
 				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render(wIDStr),
 				statusBadge,
-				m.WorkerBars[i].ViewAs(wRatio),
+				renderBufferBar(m.WorkerBars[i].Width, w.CommittedSize, w.UploadedSize, w.BufferedSize, w.TotalSize),
 				wRatio*100,
 				shortName,
 				formatBytes(w.UploadedSize),
@@ -233,14 +233,21 @@ func renderSummaryBox(m Model) string {
 
 	avgSpeedBps := float64(m.UploadedBytes) / duration.Seconds()
 
-	// Styles for Summary Output Box
+	// Styles for Summary Output Box — status depends on how the run ended.
 	boxBorderColor := lipgloss.Color("#00FF7F") // Emerald green
 	statusBadgeBg := lipgloss.Color("#00FF7F")
 	statusBadgeText := lipgloss.Color("#000000")
 	statusBadgeIcon := "✔"
 	statusTitle := "SYNC COMPLETE ('BYE BYE BYE!')"
 
-	if m.FailedFiles > 0 {
+	switch {
+	case m.State == StateCancelled:
+		boxBorderColor = lipgloss.Color("#FFD700")
+		statusBadgeBg = lipgloss.Color("#FFD700")
+		statusBadgeText = lipgloss.Color("#000000")
+		statusBadgeIcon = "⏹"
+		statusTitle = "SYNC CANCELLED ('BYE BYE BYE!' — cut short)"
+	case m.FailedFiles > 0:
 		boxBorderColor = lipgloss.Color("#FF4500")
 		statusBadgeBg = lipgloss.Color("#FF4500")
 		statusBadgeText = lipgloss.Color("#FFFFFF")
@@ -384,13 +391,71 @@ func renderSummaryBox(m Model) string {
 		lblStyle.Render("Average Upload Speed:"), magentaValStyle.Render(formatSpeed(avgSpeedBps)),
 	)
 
-	quoteSec := fmt.Sprintf("\n  %s", lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#FF69B4")).Render("🎤 \"Ain't no lie, baby, Bye Bye Bye! Bringing Sync Back to Ceph S3.\""))
+	quoteSec := fmt.Sprintf("\n  %s", lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#FF69B4")).Render("🎤 \"Ain't no lie, baby, Bye Bye Bye! Bringing Sync Back to S3.\""))
 
 	var parts []string
 	parts = append(parts, headerBanner, targetSec, statsSec, perfSec, quoteSec)
 	content := strings.Join(parts, "\n\n")
 
 	return boxStyle.Render(content)
+}
+
+// renderBufferBar draws a per-worker progress bar with three filled layers, like
+// a video player scrubber, given nested values committed <= uploaded <= buffered:
+//
+//   - committed (bright): bytes in parts the server has acknowledged (done chunks)
+//   - uploading (lilac):  bytes of the chunk(s) currently streaming to the wire
+//   - buffered  (dim):    bytes read from disk into memory, ahead of the send
+//
+// then the empty remainder. The lilac segment is the live edge that fills as a
+// single chunk uploads and then "locks in" to the committed colour.
+func renderBufferBar(width int, committed, uploaded, buffered, total int64) string {
+	if width < 1 {
+		width = 1
+	}
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2E2E38"))
+	if total <= 0 {
+		return emptyStyle.Render(strings.Repeat("█", width))
+	}
+
+	clamp := func(v int64) int64 {
+		switch {
+		case v < 0:
+			return 0
+		case v > total:
+			return total
+		default:
+			return v
+		}
+	}
+	// Enforce committed <= uploaded <= buffered <= total.
+	committed = clamp(committed)
+	uploaded = clamp(uploaded)
+	buffered = clamp(buffered)
+	if uploaded < committed {
+		uploaded = committed
+	}
+	if buffered < uploaded {
+		buffered = uploaded
+	}
+
+	cells := func(v int64) int { return int(float64(v) / float64(total) * float64(width)) }
+	cCells := cells(committed)
+	uCells := cells(uploaded) - cCells
+	bCells := cells(buffered) - cCells - uCells
+	if cCells+uCells+bCells > width {
+		bCells = width - cCells - uCells
+	}
+	eCells := width - cCells - uCells - bCells
+
+	committedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")) // done chunks
+	uploadingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#B39DFF")) // chunk in flight
+	bufferStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#413A5E"))    // read-ahead buffer
+
+	return committedStyle.Render(strings.Repeat("█", cCells)) +
+		uploadingStyle.Render(strings.Repeat("█", uCells)) +
+		bufferStyle.Render(strings.Repeat("█", bCells)) +
+		emptyStyle.Render(strings.Repeat("█", eCells))
 }
 
 func formatNumber(n int64) string {

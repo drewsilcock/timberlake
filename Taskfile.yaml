@@ -3,7 +3,6 @@ version: '3'
 
 vars:
   BINARY_NAME: timberlake
-  LEGACY_BINARY: ceph-sync
 
 tasks:
   default:
@@ -30,7 +29,7 @@ tasks:
   clean:
     desc: Remove built binaries and cleanup temporary artifacts (Bye Bye Bye!)
     cmds:
-      - rm -f {{.BINARY_NAME}} {{.LEGACY_BINARY}}
+      - rm -f {{.BINARY_NAME}}
 
   run:
     desc: Run Timberlake binary with --help

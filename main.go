@@ -37,7 +37,7 @@ func main() {
 	flag.StringVar(&s3cfgFlag, "s3cfg", defaultS3Cfg, "Path to s3cmd config file")
 	flag.IntVar(&jobsFlag, "j", 16, "Number of parallel Space Cowboy worker jobs")
 	flag.IntVar(&jobsFlag, "jobs", 16, "Number of parallel Space Cowboy worker jobs")
-	flag.Int64Var(&partSizeFlag, "part-size", 256, "Multipart upload chunk size in MiB")
+	flag.Int64Var(&partSizeFlag, "part-size", 16, "Multipart upload chunk size in MiB (smaller parts upload far faster over high-latency links)")
 	flag.StringVar(&endpointFlag, "endpoint-url", os.Getenv("AWS_ENDPOINT_URL"), "S3 / Ceph RGW endpoint URL (e.g. http://rgw.local:8080)")
 	flag.StringVar(&accessKeyFlag, "access-key", os.Getenv("AWS_ACCESS_KEY_ID"), "S3 Access Key ID")
 	flag.StringVar(&secretKeyFlag, "secret-key", os.Getenv("AWS_SECRET_ACCESS_KEY"), "S3 Secret Access Key")
@@ -126,5 +126,22 @@ func main() {
 	// Print final summary report upon exit
 	if m, ok := finalModel.(ui.Model); ok {
 		ui.PrintFinalSummary(m)
+
+		// Persist individual upload errors so they can be reviewed after exit.
+		if path, werr := ui.WriteErrorLog(m); werr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not write error log: %v\n", werr)
+		} else if path != "" {
+			fmt.Fprintf(os.Stderr, "\n⚠  %d file(s) failed — details written to:\n   %s\n", len(m.Errors), path)
+			max := len(m.Errors)
+			if max > 10 {
+				max = 10
+			}
+			for _, e := range m.Errors[:max] {
+				fmt.Fprintf(os.Stderr, "   • %s: %s\n", e.RelativePath, e.Message)
+			}
+			if len(m.Errors) > 10 {
+				fmt.Fprintf(os.Stderr, "   … and %d more (see log file)\n", len(m.Errors)-10)
+			}
+		}
 	}
 }

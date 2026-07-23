@@ -105,6 +105,32 @@ golangci-lint run ./...
 Build, tests, and lint also run in CI on every push and pull request against
 `main` (see `.github/workflows/ci.yml`).
 
+### Diagnostics
+
+Two standalone helper commands live alongside the app for debugging transfers
+against an endpoint (both read credentials/endpoint from the environment or an
+AWS profile, and clean up any objects they create):
+
+```sh
+# Reproduce a single multipart upload with server-response logging
+go run ./s3diag -bucket my-bucket -size 200 -part-size 16
+
+# Measure upload/download throughput and latency across concurrency levels
+go run ./speedtest -bucket my-bucket -size 256 -concurrency 1,4,8,16
+```
+
+### Errors, cancellation & progress
+
+- **Errors** — if any file fails, the run finishes as *"Sync completed with
+  errors"* and the individual failures are written to a
+  `timberlake-errors-<timestamp>.log` file in the working directory.
+- **Cancellation** — quitting with `q`/`Ctrl+C` before the sync finishes reports
+  *"Sync cancelled"*, not success.
+- **Speed/ETA** reflect a rolling average of bytes actually uploaded (not local
+  read-ahead), so they stay meaningful on slow links. Note that upload
+  throughput to high-latency endpoints improves substantially with more
+  parallelism, which is why the default part size is a modest 16 MiB.
+
 ## Why is it called Timberlake?
 
 Because it keeps your files NSYNC.
