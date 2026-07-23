@@ -1,0 +1,43 @@
+version: "2"
+run:
+  tests: true
+linters:
+  enable:
+    - bodyclose
+    - revive
+  settings:
+    revive:
+      severity: warning
+      rules:
+        - name: exported
+          disabled: false
+        - name: package-comments
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # manager.Uploader is deprecated in favour of feature/s3/transfermanager,
+      # but the latter is still new and the manager API remains fully supported.
+      # Tracked as a future migration rather than blocking lint here.
+      - linters:
+          - staticcheck
+        text: "SA1019:.*superceded by feature/s3/transfermanager"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

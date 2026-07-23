@@ -1,0 +1,56 @@
+# https://taskfile.dev
+version: '3'
+
+vars:
+  BINARY_NAME: timberlake
+  LEGACY_BINARY: ceph-sync
+
+tasks:
+  default:
+    desc: Default task to build Timberlake
+    cmds:
+      - task: build
+
+  build:
+    desc: Build the Timberlake binary (No Strings Attached)
+    cmds:
+      - go build -o {{.BINARY_NAME}} main.go
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BINARY_NAME}}'
+
+  test:
+    desc: Run unit tests across all packages
+    cmds:
+      - go test -v ./...
+
+  clean:
+    desc: Remove built binaries and cleanup temporary artifacts (Bye Bye Bye!)
+    cmds:
+      - rm -f {{.BINARY_NAME}} {{.LEGACY_BINARY}}
+
+  run:
+    desc: Run Timberlake binary with --help
+    deps: [build]
+    cmds:
+      - ./{{.BINARY_NAME}} --help
+
+  fmt:
+    desc: Format all Go source files
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet to check code sanity
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Run fmt, vet, and tests (It's Gonna Be Me!)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test

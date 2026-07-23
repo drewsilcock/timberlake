@@ -1,0 +1,29 @@
+# Compiled binaries
+/timberlake
+
+/testdata
+
+# Test binaries and coverage output
+*.test
+*.out
+coverage.*
+
+# Taskfile cache
+/.task/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directory (if ever vendored)
+/vendor/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local S3 credentials — never commit these
+.s3cfg
+*.env
