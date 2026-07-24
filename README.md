@@ -25,8 +25,9 @@ Source/destination are now generic `Source`/`Destination` interfaces
   multipart uploads for large files.
 - **Resumable at two levels** — whole files already present at full size are
   skipped; and an *interrupted single file* resumes from its last committed
-  chunk (S3 multipart parts are verified by checksum and only the missing or
-  altered ones re-uploaded; SFTP/local resume by offset).
+  chunk. S3 verifies each existing multipart part by checksum and re-uploads only
+  the missing or altered ones; SFTP verifies the partial's bytes against the
+  source before appending, and re-uploads from scratch on any mismatch.
 - **S3-compatible** — path-style addressing and checksum handling tuned for
   self-hosted gateways like Ceph RGW.
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`

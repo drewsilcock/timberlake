@@ -4,7 +4,9 @@
 package sftpbackend
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -156,9 +158,14 @@ func (s *SFTP) Put(_ context.Context, item transfer.Item, open transfer.OpenFunc
 		}
 	}
 
+	// Resume only if a shorter partial file exists AND its bytes actually match
+	// the source prefix (verified by checksum). Otherwise re-upload from scratch,
+	// so a corrupt/divergent partial can never silently produce a bad file.
 	var start int64
 	if fi, err := s.client.Stat(remote); err == nil && fi.Size() > 0 && fi.Size() < size {
-		start = fi.Size()
+		if ok, err := s.partialMatches(remote, open, fi.Size()); err == nil && ok {
+			start = fi.Size()
+		}
 	}
 
 	// Seek-to-offset rather than O_APPEND: SFTP's append flag is not honoured
@@ -205,6 +212,34 @@ func (s *SFTP) Put(_ context.Context, item transfer.Item, open transfer.OpenFunc
 type writerFunc func(p []byte) (int, error)
 
 func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
+
+// partialMatches reports whether the first `length` bytes of the remote file
+// equal the first `length` bytes of the source, by comparing SHA-256 hashes. It
+// reads both prefixes; on a slow link this costs one download of the partial,
+// which is still far cheaper than re-uploading an already-correct prefix.
+func (s *SFTP) partialMatches(remote string, open transfer.OpenFunc, length int64) (bool, error) {
+	rf, err := s.client.Open(remote)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rf.Close() }()
+	remoteSum := sha256.New()
+	if _, err := io.CopyN(remoteSum, rf, length); err != nil {
+		return false, err
+	}
+
+	sf, err := open(0)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = sf.Close() }()
+	sourceSum := sha256.New()
+	if _, err := io.CopyN(sourceSum, sf, length); err != nil {
+		return false, err
+	}
+
+	return bytes.Equal(remoteSum.Sum(nil), sourceSum.Sum(nil)), nil
+}
 
 // relPath returns the forward-slash path of target relative to root.
 func relPath(root, target string) (string, error) {

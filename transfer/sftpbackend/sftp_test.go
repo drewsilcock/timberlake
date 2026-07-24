@@ -96,3 +96,42 @@ func TestSFTPResumeAppendsPartial(t *testing.T) {
 		t.Errorf("resumed sftp file mismatch (got %d want %d bytes)", len(got), len(full))
 	}
 }
+
+func TestSFTPResumeRejectsCorruptPartial(t *testing.T) {
+	ctx := context.Background()
+	host, port, remoteRoot := startSFTPServer(t)
+
+	full := make([]byte, 50_000)
+	for i := range full {
+		full[i] = byte((i * 13) % 251)
+	}
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "big.bin"), full, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-seed remote with a partial whose bytes DIFFER from the source prefix.
+	bad := make([]byte, 20_000)
+	for i := range bad {
+		bad[i] = 0xEE
+	}
+	if err := os.WriteFile(filepath.Join(remoteRoot, "big.bin"), bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src, _ := localfs.New(srcDir)
+	remote := newSFTP(t, host, port, remoteRoot)
+	item := transfer.Item{RelativePath: "big.bin", Size: int64(len(full))}
+	open, _ := src.Open(ctx, item)
+	if err := remote.Put(ctx, item, open, item.Size, nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// The corrupt partial must have been discarded and the whole file rewritten.
+	got, err := os.ReadFile(filepath.Join(remoteRoot, "big.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(got) != sha256.Sum256(full) {
+		t.Errorf("corrupt partial not corrected (got %d bytes)", len(got))
+	}
+}
