@@ -131,7 +131,14 @@ func (m Model) View() string {
 		statusBadge := ""
 		switch m.State {
 		case StateUploading:
-			statusBadge = statusUploadingStyle.Render("UPLOADING (\"CAN'T STOP THE FEELING!\")")
+			switch {
+			case m.Config.VerifyOnly:
+				statusBadge = statusPausedStyle.Render("VERIFYING (no writes)")
+			case m.Config.DryRun:
+				statusBadge = statusPausedStyle.Render("DRY RUN (no writes)")
+			default:
+				statusBadge = statusUploadingStyle.Render("UPLOADING (\"CAN'T STOP THE FEELING!\")")
+			}
 		case StatePaused:
 			statusBadge = statusPausedStyle.Render("PAUSED (\"DRIVE MYSELF CRAZY\")")
 		case StateError:
@@ -256,19 +263,34 @@ func renderSummaryBox(m Model) string {
 	statusBadgeIcon := "✔"
 	statusTitle := "SYNC COMPLETE ('BYE BYE BYE!')"
 
-	switch {
-	case m.State == StateCancelled:
+	amber := func(title string) {
 		boxBorderColor = lipgloss.Color("#FFD700")
 		statusBadgeBg = lipgloss.Color("#FFD700")
 		statusBadgeText = lipgloss.Color("#000000")
 		statusBadgeIcon = "⏹"
-		statusTitle = "SYNC CANCELLED ('BYE BYE BYE!' — cut short)"
-	case m.FailedFiles > 0:
+		statusTitle = title
+	}
+	red := func(title string) {
 		boxBorderColor = lipgloss.Color("#FF4500")
 		statusBadgeBg = lipgloss.Color("#FF4500")
 		statusBadgeText = lipgloss.Color("#FFFFFF")
 		statusBadgeIcon = "✖"
-		statusTitle = "SYNC COMPLETED WITH ERRORS ('TEARIN' UP MY HEART')"
+		statusTitle = title
+	}
+
+	switch {
+	case m.State == StateCancelled:
+		amber("SYNC CANCELLED ('BYE BYE BYE!' — cut short)")
+	case m.Config.VerifyOnly:
+		if m.FailedFiles > 0 {
+			red(fmt.Sprintf("VERIFICATION FAILED — %d discrepancy(ies)", m.FailedFiles))
+		} else {
+			statusTitle = "VERIFICATION PASSED ('N SYNC — all present)"
+		}
+	case m.Config.DryRun:
+		amber("DRY RUN COMPLETE (no data written)")
+	case m.FailedFiles > 0:
+		red("SYNC COMPLETED WITH ERRORS ('TEARIN' UP MY HEART')")
 	}
 
 	boxStyle := lipgloss.NewStyle().

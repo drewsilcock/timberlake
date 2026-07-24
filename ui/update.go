@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"time"
 
 	"timberlake/transfer"
@@ -291,6 +292,8 @@ func startWorkerPool(m *Model) {
 	dest := m.Dest
 	ctx := m.Ctx
 	msgChan := m.MsgChan
+	dryRun := m.Config.DryRun
+	verifyOnly := m.Config.VerifyOnly
 
 	for i := 0; i < m.Config.Jobs; i++ {
 		workerID := i
@@ -306,6 +309,20 @@ func startWorkerPool(m *Model) {
 				exists, size, err := dest.Stat(ctx, item)
 				if err == nil && exists && size == item.Size {
 					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Skipped", FileName: item.RelativePath, Size: item.Size}
+					continue
+				}
+
+				// Non-writing modes: report what would happen, never transfer.
+				if verifyOnly {
+					detail := "missing at destination"
+					if exists {
+						detail = fmt.Sprintf("size mismatch (destination has %d, want %d)", size, item.Size)
+					}
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Error", FileName: item.RelativePath, Err: detail, Size: item.Size}
+					continue
+				}
+				if dryRun {
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Done", FileName: item.RelativePath, Size: item.Size}
 					continue
 				}
 
