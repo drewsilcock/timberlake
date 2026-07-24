@@ -24,6 +24,11 @@ type AppConfig struct {
 	S3CfgPath   string
 	VerifyOnly  bool
 	DryRun      bool
+
+	// SFTP options (used when a source/destination is an sftp:// endpoint).
+	SFTPPassword string
+	SFTPKeyPath  string
+	SFTPInsecure bool // skip known_hosts host-key verification
 }
 
 // ParseS3Cfg reads an s3cmd config file (e.g. ~/.s3cfg) and extracts relevant endpoint & auth fields.

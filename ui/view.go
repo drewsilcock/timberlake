@@ -42,13 +42,29 @@ var (
 			MarginTop(1)
 )
 
+// sourceLabel / destLabel describe the endpoints for display, falling back to
+// config when the backends aren't set (e.g. in unit tests).
+func (m Model) sourceLabel() string {
+	if m.Source != nil {
+		return m.Source.Describe()
+	}
+	return m.Config.SourceDir
+}
+
+func (m Model) destLabel() string {
+	if m.Dest != nil {
+		return m.Dest.Describe()
+	}
+	return m.Config.Destination
+}
+
 func (m Model) View() string {
 	var b strings.Builder
 
 	// Header
 	headerText := fmt.Sprintf("%s %s",
 		titleStyle.Render("TIMBERLAKE"),
-		subtitleStyle.Render(fmt.Sprintf("Source: %s ➔ s3://%s/%s 🎶 No Strings Attached", m.Config.SourceDir, m.Config.Bucket, m.Config.Prefix)),
+		subtitleStyle.Render(fmt.Sprintf("Source: %s ➔ %s 🎶 No Strings Attached", m.sourceLabel(), m.destLabel())),
 	)
 	b.WriteString(headerBoxStyle.Render(headerText))
 	b.WriteString("\n")
@@ -59,7 +75,7 @@ func (m Model) View() string {
 		b.WriteString(panelStyle.Render(fmt.Sprintf(
 			"%s Scanning local directory tree... ('It's Gonna Be Me!')\nSource: %s",
 			m.Spinner.View(),
-			statusScanningStyle.Render(m.Config.SourceDir),
+			statusScanningStyle.Render(m.sourceLabel()),
 		)))
 
 	case StateUploading, StatePaused, StateDone, StateError:
@@ -306,8 +322,8 @@ func renderSummaryBox(m Model) string {
 	targetSec := fmt.Sprintf(
 		"%s\n  %s %s\n  %s %s\n  %s %s",
 		secHeaderStyle.Render("📍 SYNC TARGETS & CONFIGURATION (\"No Strings Attached\")"),
-		lblStyle.Render("Source Directory:  "), valStyle.Render(m.Config.SourceDir),
-		lblStyle.Render("S3 Destination:    "), cyanValStyle.Render(fmt.Sprintf("s3://%s/%s", m.Config.Bucket, m.Config.Prefix)),
+		lblStyle.Render("Source:            "), valStyle.Render(m.sourceLabel()),
+		lblStyle.Render("Destination:       "), cyanValStyle.Render(m.destLabel()),
 		lblStyle.Render("Space Cowboys:     "), valStyle.Render(fmt.Sprintf("%d Workers | Chunk Size: %d MiB", m.Config.Jobs, m.Config.PartSizeMB)),
 	)
 

@@ -22,9 +22,22 @@ tasks:
       - '{{.BINARY_NAME}}'
 
   test:
-    desc: Run unit tests across all packages
+    desc: Run unit and always-on integration tests (local + in-process SFTP)
     cmds:
-      - go test -v ./...
+      - go test ./...
+
+  test-integration:
+    desc: Run all tests incl. S3 backend against a throwaway MinIO container
+    cmds:
+      - docker rm -f tl-test-minio 2>/dev/null || true
+      - docker run -d --name tl-test-minio -p 9100:9000 -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 minio/minio server /data
+      - sleep 3
+      - docker run --rm --network host -e AWS_ACCESS_KEY_ID=testkey -e AWS_SECRET_ACCESS_KEY=testsecret123 amazon/aws-cli --endpoint-url http://localhost:9100 s3 mb s3://tlbucket || true
+      - defer: docker rm -f tl-test-minio
+      - >-
+        TL_S3_ENDPOINT=http://localhost:9100 TL_S3_BUCKET=tlbucket
+        AWS_ACCESS_KEY_ID=testkey AWS_SECRET_ACCESS_KEY=testsecret123
+        go test ./...
 
   clean:
     desc: Remove built binaries and cleanup temporary artifacts (Bye Bye Bye!)

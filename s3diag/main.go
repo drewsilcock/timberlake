@@ -20,7 +20,7 @@ import (
 	"os"
 	"time"
 
-	"timberlake/s3client"
+	"timberlake/transfer/s3backend"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -108,7 +108,7 @@ func main() {
 		u.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 
-	key := s3client.BuildKey(*prefix, "s3diag-testfile.bin")
+	key := s3backend.BuildKey(*prefix, "s3diag-testfile.bin")
 
 	f, err := os.Open(tmp.Name())
 	if err != nil {

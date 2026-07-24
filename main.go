@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 
+	"timberlake/backends"
 	"timberlake/config"
 	"timberlake/ui"
 
@@ -15,15 +17,18 @@ import (
 
 func main() {
 	var (
-		s3cfgFlag     string
-		jobsFlag      int
-		partSizeFlag  int64
-		endpointFlag  string
-		accessKeyFlag string
-		secretKeyFlag string
-		noSSLFlag     bool
-		dryRunFlag    bool
-		verifyFlag    bool
+		s3cfgFlag        string
+		jobsFlag         int
+		partSizeFlag     int64
+		endpointFlag     string
+		accessKeyFlag    string
+		secretKeyFlag    string
+		noSSLFlag        bool
+		dryRunFlag       bool
+		verifyFlag       bool
+		sftpPasswordFlag string
+		sftpKeyFlag      string
+		sftpInsecureFlag bool
 	)
 
 	defaultS3Cfg := os.Getenv("S3CMD_CONFIG")
@@ -44,13 +49,18 @@ func main() {
 	flag.BoolVar(&noSSLFlag, "no-ssl", false, "Disable HTTPS/SSL for S3 endpoint (No Strings Attached)")
 	flag.BoolVar(&dryRunFlag, "dry-run", false, "Perform dry run scan without uploading")
 	flag.BoolVar(&verifyFlag, "verify-only", false, "Perform non-writing MD5/size check")
+	flag.StringVar(&sftpPasswordFlag, "sftp-password", "", "Password for sftp:// endpoints (else SSH agent / key auth)")
+	flag.StringVar(&sftpKeyFlag, "sftp-key", "", "Path to a private key for sftp:// endpoints")
+	flag.BoolVar(&sftpInsecureFlag, "sftp-insecure", false, "Skip SSH known_hosts verification for sftp:// endpoints")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] SOURCE_DIR s3://BUCKET/PREFIX [JOBS]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Timberlake — 'N SYNC-powered, resumable, parallel local -> Ceph RGW (S3-compatible) upload tool in Go.\n")
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] SOURCE DEST [JOBS]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Timberlake — 'N SYNC-powered, resumable, parallel file sync in Go.\n")
+		fmt.Fprintf(os.Stderr, "SOURCE and DEST may each be a local path, s3://bucket/prefix, or sftp://[user@]host[:port]/path.\n")
 		fmt.Fprintf(os.Stderr, "Ain't no lie, baby, Bye Bye Bye!\n\n")
-		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  %s /data/scan s3://my-bucket/scans/site-001 24\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  %s /data/scan s3://my-bucket/scans/site-001 24\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s /data/scan sftp://user@host/backup/scan\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}
@@ -63,8 +73,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	sourceDir := args[0]
-	destination := args[1]
+	sourceURI := args[0]
+	destURI := args[1]
 
 	if len(args) >= 3 {
 		if j, err := strconv.Atoi(args[2]); err == nil && j > 0 {
@@ -72,26 +82,21 @@ func main() {
 		}
 	}
 
-	bucket, prefix, err := config.ParseDestination(destination)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(2)
-	}
-
 	appCfg := &config.AppConfig{
-		SourceDir:   sourceDir,
-		Destination: destination,
-		Bucket:      bucket,
-		Prefix:      prefix,
-		Jobs:        jobsFlag,
-		PartSizeMB:  partSizeFlag,
-		EndpointURL: endpointFlag,
-		AccessKey:   accessKeyFlag,
-		SecretKey:   secretKeyFlag,
-		UseSSL:      !noSSLFlag,
-		S3CfgPath:   s3cfgFlag,
-		DryRun:      dryRunFlag,
-		VerifyOnly:  verifyFlag,
+		SourceDir:    sourceURI,
+		Destination:  destURI,
+		Jobs:         jobsFlag,
+		PartSizeMB:   partSizeFlag,
+		EndpointURL:  endpointFlag,
+		AccessKey:    accessKeyFlag,
+		SecretKey:    secretKeyFlag,
+		UseSSL:       !noSSLFlag,
+		S3CfgPath:    s3cfgFlag,
+		DryRun:       dryRunFlag,
+		VerifyOnly:   verifyFlag,
+		SFTPPassword: sftpPasswordFlag,
+		SFTPKeyPath:  sftpKeyFlag,
+		SFTPInsecure: sftpInsecureFlag,
 	}
 
 	// Try reading ~/.s3cfg if available
@@ -110,9 +115,24 @@ func main() {
 		appCfg.EndpointURL = os.Getenv("AWS_ENDPOINT_URL")
 	}
 
+	ctx := context.Background()
+	source, err := backends.NewSource(ctx, sourceURI, appCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening source %q: %v\n", sourceURI, err)
+		os.Exit(2)
+	}
+	defer func() { _ = source.Close() }()
+
+	dest, err := backends.NewDestination(ctx, destURI, appCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening destination %q: %v\n", destURI, err)
+		os.Exit(2)
+	}
+	defer func() { _ = dest.Close() }()
+
 	// Run Bubbletea TUI Program
 	p := tea.NewProgram(
-		ui.InitialModel(appCfg),
+		ui.InitialModel(appCfg, source, dest),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)

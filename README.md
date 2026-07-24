@@ -1,9 +1,10 @@
 # Timberlake
 
-Timberlake is a tool for efficient, parallelised, resumable file syncing to
-S3-compatible object stores such as Amazon S3 and Ceph RGW. It walks a local
-directory and uploads its contents to a bucket, skipping files that are already
-present with a matching size, and renders live progress in a terminal UI.
+Timberlake is a tool for efficient, parallelised, resumable file syncing between
+local filesystems, S3-compatible object stores (Amazon S3, Ceph RGW), and SFTP
+servers. Any supported source can be synced to any supported destination; it
+skips files already present at full size and renders live progress in a terminal
+UI.
 
 ## Status
 
@@ -11,25 +12,27 @@ I'm using this for relatively big (few TB) transfers and it seems reliable so
 far. The code is fairly vibey – if it turns out to be useful longer-term, I'll
 probably do some re-writing.
 
-I'd like to add support for SFTP. Also, atm it only supports local disk as
-source and S3 bucket as destination, I'm going to refactor that into generic
-"Source" and "Destination" interfaces.
+Source/destination are now generic `Source`/`Destination` interfaces
+(`transfer/`), with local, S3, and SFTP backends and per-file resume.
 
 ## Features
 
-- **Parallel uploads** — configurable worker pool (default 16) with concurrent
+- **Pluggable backends** — local filesystem, `s3://` object stores, and
+  `sftp://` servers, mixable in either direction (local→S3, S3→local,
+  local→SFTP, …). Each backend is a small `Source`/`Destination` pair under
+  `transfer/`.
+- **Parallel transfers** — configurable worker pool (default 16) with concurrent
   multipart uploads for large files.
-- **Resumable** — objects already present at the destination with a matching
-  size are skipped, so re-running after an interruption only transfers what's
-  missing.
-- **S3-compatible** — works against Amazon S3, Ceph RGW, and other
-  S3-compatible endpoints, with path-style addressing for self-hosted gateways.
+- **Resumable at two levels** — whole files already present at full size are
+  skipped; and an *interrupted single file* resumes from its last committed
+  chunk (S3 multipart parts are verified by checksum and only the missing or
+  altered ones re-uploaded; SFTP/local resume by offset).
+- **S3-compatible** — path-style addressing and checksum handling tuned for
+  self-hosted gateways like Ceph RGW.
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`
-  (or `$S3CMD_CONFIG`) when present, so it slots into existing setups.
-- **Live TUI** — a Bubble Tea interface showing per-worker progress, totals, and
-  a running summary, with pause/resume support.
-- **Dry-run & verify** — preview what would be uploaded, or check remote
-  size/existence without writing anything.
+  (or `$S3CMD_CONFIG`) when present.
+- **Live TUI** — per-worker bars (committed / in-flight / read-ahead), totals,
+  rolling speed, and a running summary, with pause/resume support.
 
 ## Installation
 
@@ -49,16 +52,33 @@ This produces a `timberlake` binary in the working directory.
 ## Usage
 
 ```
-timberlake [options] SOURCE_DIR s3://BUCKET/PREFIX [JOBS]
+timberlake [options] SOURCE DEST [JOBS]
 ```
 
-`SOURCE_DIR` is the local directory to sync, and `s3://BUCKET/PREFIX` is the
-destination. An optional positional `JOBS` argument overrides the worker count.
+`SOURCE` and `DEST` may each be one of:
+
+| Form | Backend |
+| --- | --- |
+| `/path/to/dir` (or `file:///path`) | local filesystem |
+| `s3://bucket/prefix` | S3 / Ceph RGW |
+| `sftp://[user@]host[:port]/path` | SFTP (over an existing SSH server) |
+
+An optional positional `JOBS` argument overrides the worker count.
 
 ```sh
-# Upload a local scan directory into a bucket prefix, using 24 workers
+# Local directory → S3 bucket prefix, 24 workers
 timberlake /data/scan s3://my-bucket/scans/site-001 24
+
+# Local directory → SFTP server (key/agent auth, or -sftp-password)
+timberlake /data/scan sftp://user@host/backup/scan
+
+# Pull an S3 prefix back down to local disk
+timberlake s3://my-bucket/scans/site-001 /restore/site-001
 ```
+
+SFTP connects to an existing SSH server's `sftp` subsystem (no separate daemon);
+auth uses your SSH agent / default keys, or `-sftp-key` / `-sftp-password`. Host
+keys are checked against `~/.ssh/known_hosts` unless `-sftp-insecure` is set.
 
 ### Options
 
@@ -114,6 +134,21 @@ golangci-lint run ./...
 
 Build, tests, and lint also run in CI on every push and pull request against
 `main` (see `.github/workflows/ci.yml`).
+
+### Testing
+
+Tests are **end-to-end per backend** (real byte transfers verified by checksum),
+not mocks:
+
+- `task test` — local↔local and local↔SFTP (via an in-process SSH/SFTP server)
+  round-trips and resume. No external services; always runs.
+- `task test-integration` — the above plus the S3 backend (round-trips, and
+  per-file resume incl. interrupt-and-resume and checksum-guarded re-upload of a
+  corrupt part) against a throwaway MinIO container.
+
+The S3 tests skip themselves unless `TL_S3_ENDPOINT` and `TL_S3_BUCKET` (plus
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) are set, so they can also point at a
+real Ceph endpoint. Shared helpers live in `transfer/transfertest`.
 
 ### Diagnostics
 

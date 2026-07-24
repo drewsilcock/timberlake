@@ -5,8 +5,7 @@ import (
 	"time"
 
 	"timberlake/config"
-	"timberlake/s3client"
-	"timberlake/scanner"
+	"timberlake/transfer"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -56,8 +55,8 @@ type WorkerState struct {
 
 type Model struct {
 	Config       *config.AppConfig
-	S3Client     *s3client.S3Client
-	ScanResult   *scanner.ScanResult
+	Source       transfer.Source
+	Dest         transfer.Destination
 	State        ProgramState
 	ErrorMessage string
 
@@ -73,7 +72,7 @@ type Model struct {
 
 	// Workers & Message Channel
 	Workers   []WorkerState
-	WorkQueue []scanner.FileItem
+	WorkQueue []transfer.Item
 	MsgChan   chan tea.Msg
 
 	// Timing & Speed
@@ -170,8 +169,9 @@ type ScanProgressMsg struct {
 }
 
 type ScanCompleteMsg struct {
-	Result *scanner.ScanResult
-	Err    error
+	Items      []transfer.Item
+	TotalBytes int64
+	Err        error
 }
 
 type WorkerProgressMsg struct {
@@ -196,7 +196,7 @@ type VerificationCompleteMsg struct {
 	ErrMsg string
 }
 
-func InitialModel(appCfg *config.AppConfig) Model {
+func InitialModel(appCfg *config.AppConfig, source transfer.Source, dest transfer.Destination) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Gradient progress bar for overall data
@@ -232,6 +232,8 @@ func InitialModel(appCfg *config.AppConfig) Model {
 
 	return Model{
 		Config:           appCfg,
+		Source:           source,
+		Dest:             dest,
 		State:            StateScanning,
 		Workers:          workers,
 		MsgChan:          make(chan tea.Msg, 1000),
@@ -253,18 +255,19 @@ func InitialModel(appCfg *config.AppConfig) Model {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.Spinner.Tick,
-		startScanCmd(m.Config.SourceDir),
+		startScanCmd(m.Ctx, m.Source),
 		waitForMsgCmd(m.MsgChan),
 	)
 }
 
-func startScanCmd(sourceDir string) tea.Cmd {
+func startScanCmd(ctx context.Context, src transfer.Source) tea.Cmd {
 	return func() tea.Msg {
-		res, err := scanner.ScanDirectory(sourceDir, nil)
-		return ScanCompleteMsg{
-			Result: res,
-			Err:    err,
+		items, err := src.Scan(ctx, nil)
+		var total int64
+		for _, it := range items {
+			total += it.Size
 		}
+		return ScanCompleteMsg{Items: items, TotalBytes: total, Err: err}
 	}
 }
 

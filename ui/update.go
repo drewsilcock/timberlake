@@ -1,11 +1,9 @@
 package ui
 
 import (
-	"fmt"
 	"time"
 
-	"timberlake/s3client"
-	"timberlake/scanner"
+	"timberlake/transfer"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -101,22 +99,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.ScanResult = msg.Result
-		m.TotalFiles = msg.Result.TotalFiles
-		m.TotalBytes = msg.Result.TotalBytes
-		m.WorkQueue = msg.Result.Files
+		m.TotalFiles = int64(len(msg.Items))
+		m.TotalBytes = msg.TotalBytes
+		m.WorkQueue = msg.Items
 		m.State = StateUploading
 		m.StartTime = time.Now()
 
-		// Initialize S3 Client
-		s3Client, err := s3client.NewS3Client(m.Ctx, m.Config)
-		if err != nil {
-			m.State = StateError
-			m.ErrorMessage = fmt.Sprintf("Failed to initialize S3 client: %v", err)
+		if m.TotalFiles == 0 {
+			m.State = StateDone
 			m.EndTime = time.Now()
 			return m, nil
 		}
-		m.S3Client = s3Client
 
 		// Start worker pool. The single message-channel consumer armed in
 		// Init() keeps pumping worker messages from here on — we must not arm
@@ -288,81 +281,61 @@ func (m *Model) sampleSpeed() {
 }
 
 func startWorkerPool(m *Model) {
-	fileChan := make(chan scanner.FileItem, len(m.WorkQueue))
+	fileChan := make(chan transfer.Item, len(m.WorkQueue))
 	for _, f := range m.WorkQueue {
 		fileChan <- f
 	}
 	close(fileChan)
 
+	source := m.Source
+	dest := m.Dest
+	ctx := m.Ctx
+	msgChan := m.MsgChan
+
 	for i := 0; i < m.Config.Jobs; i++ {
 		workerID := i
 		go func() {
 			for item := range fileChan {
-				if m.Ctx.Err() != nil {
+				if ctx.Err() != nil {
 					return
 				}
 
-				key := s3client.BuildKey(m.Config.Prefix, item.RelativePath)
+				// Step 1: skip if the destination already has it at full size.
+				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Checking", FileName: item.RelativePath, Size: item.Size}
 
-				// Step 1: Check if object already exists
-				m.MsgChan <- WorkerStatusMsg{
-					WorkerID: workerID,
-					Status:   "Checking",
-					FileName: item.RelativePath,
-					Size:     item.Size,
-				}
-
-				exists, err := m.S3Client.CheckObjectExists(m.Ctx, m.Config.Bucket, key, item.Size)
-				if err == nil && exists {
-					m.MsgChan <- WorkerStatusMsg{
-						WorkerID: workerID,
-						Status:   "Skipped",
-						FileName: item.RelativePath,
-						Size:     item.Size,
-					}
+				exists, size, err := dest.Stat(ctx, item)
+				if err == nil && exists && size == item.Size {
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Skipped", FileName: item.RelativePath, Size: item.Size}
 					continue
 				}
 
-				// Step 2: Upload file
-				m.MsgChan <- WorkerStatusMsg{
-					WorkerID: workerID,
-					Status:   "Uploading",
-					FileName: item.RelativePath,
-					Size:     item.Size,
+				// Step 2: transfer (destination resumes from partial state).
+				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Uploading", FileName: item.RelativePath, Size: item.Size}
+
+				open, err := source.Open(ctx, item)
+				if err == nil {
+					// onProgress is rate-limited inside the backend and reports
+					// absolute values, so we forward it non-blocking — the
+					// transfer must never stall on the UI.
+					err = dest.Put(ctx, item, open, item.Size, func(committed, uploaded, buffered int64) {
+						select {
+						case msgChan <- WorkerProgressMsg{
+							WorkerID:      workerID,
+							FileName:      item.RelativePath,
+							CommittedSize: committed,
+							UploadedSize:  uploaded,
+							BufferedSize:  buffered,
+							TotalSize:     item.Size,
+						}:
+						default:
+						}
+					})
 				}
 
-				// onProgress is already rate-limited (ticked inside UploadFile)
-				// and reports absolute values, so we just forward it
-				// non-blocking — the upload must never stall on the UI.
-				err = m.S3Client.UploadFile(m.Ctx, item.AbsolutePath, m.Config.Bucket, key, func(committed, uploaded, buffered int64) {
-					select {
-					case m.MsgChan <- WorkerProgressMsg{
-						WorkerID:      workerID,
-						FileName:      item.RelativePath,
-						CommittedSize: committed,
-						UploadedSize:  uploaded,
-						BufferedSize:  buffered,
-						TotalSize:     item.Size,
-					}:
-					default:
-					}
-				})
-
 				if err != nil {
-					m.MsgChan <- WorkerStatusMsg{
-						WorkerID: workerID,
-						Status:   "Error",
-						FileName: item.RelativePath,
-						Err:      err.Error(),
-						Size:     item.Size,
-					}
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Error", FileName: item.RelativePath, Err: err.Error(), Size: item.Size}
 				} else {
-					m.MsgChan <- WorkerStatusMsg{
-						WorkerID: workerID,
-						Status:   "Done",
-						FileName: item.RelativePath,
-						Size:     item.Size,
-					}
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Done", FileName: item.RelativePath, Size: item.Size}
 				}
 			}
 		}()
