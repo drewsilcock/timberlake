@@ -13,7 +13,9 @@ far. The code is fairly vibey – if it turns out to be useful longer-term, I'll
 probably do some re-writing.
 
 Source/destination are now generic `Source`/`Destination` interfaces
-(`transfer/`), with local, S3, and SFTP backends and per-file resume.
+(`transfer/`), with local, S3, and SFTP backends and per-file resume. I've
+tested the S3 destination fairly thoroughly, the others are still a bit
+experimental.
 
 ## Features
 
@@ -33,8 +35,7 @@ Source/destination are now generic `Source`/`Destination` interfaces
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`
   (or `$S3CMD_CONFIG`) when present.
 - **Live TUI** — per-worker bars (committed / in-flight / read-ahead), totals,
-  rolling speed, and a running summary, with pause/resume support. Pass
-  `--out-of-sync` for a plain, 'N SYNC-free interface.
+  rolling speed, and a running summary, with pause/resume support.
 
 ## Installation
 
@@ -181,6 +182,10 @@ go run ./speedtest -bucket my-bucket -size 256 -concurrency 1,4,8,16
 ## Why is it called Timberlake?
 
 Because it keeps your files NSYNC.
+
+## I am very boring and want a file syncing TUI with absolutely no references to popular 90s boy band NSYNC
+
+Just use `--out-of-sync` to enable ultra-boring mode. It's your choice, as long as you realise there are ZERO NSYNC trivia facts in the Out Of Sync version.
 
 ## Legal notice
 
