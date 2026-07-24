@@ -3,7 +3,9 @@
 package localfs
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -122,10 +124,14 @@ func (l *Local) Put(_ context.Context, item transfer.Item, open transfer.OpenFun
 		return fmt.Errorf("mkdir for %s: %w", dst, err)
 	}
 
-	// Resume: if a shorter partial file exists, append from its length.
+	// Resume only if a shorter partial file exists AND its bytes match the
+	// source prefix (verified by checksum); otherwise overwrite from scratch, so
+	// a corrupt/divergent partial can't silently produce a bad file.
 	var start int64
 	if fi, err := os.Stat(dst); err == nil && fi.Size() > 0 && fi.Size() < size {
-		start = fi.Size()
+		if ok, err := partialMatches(dst, open, fi.Size()); err == nil && ok {
+			start = fi.Size()
+		}
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY
@@ -170,3 +176,29 @@ func (l *Local) Put(_ context.Context, item transfer.Item, open transfer.OpenFun
 type writerFunc func(p []byte) (int, error)
 
 func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
+
+// partialMatches reports whether the first `length` bytes of the file at path
+// equal the first `length` bytes of the source, by comparing SHA-256 hashes.
+func partialMatches(path string, open transfer.OpenFunc, length int64) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	dstSum := sha256.New()
+	if _, err := io.CopyN(dstSum, f, length); err != nil {
+		return false, err
+	}
+
+	src, err := open(0)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = src.Close() }()
+	srcSum := sha256.New()
+	if _, err := io.CopyN(srcSum, src, length); err != nil {
+		return false, err
+	}
+
+	return bytes.Equal(dstSum.Sum(nil), srcSum.Sum(nil)), nil
+}

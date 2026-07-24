@@ -89,3 +89,41 @@ func TestLocalResumeAppendsPartial(t *testing.T) {
 		t.Errorf("resumed file does not match original (len got=%d want=%d)", len(got), len(full))
 	}
 }
+
+func TestLocalResumeRejectsCorruptPartial(t *testing.T) {
+	ctx := context.Background()
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	full := make([]byte, 20_000)
+	for i := range full {
+		full[i] = byte(i * 7)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "big.bin"), full, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-seed a partial whose bytes DIFFER from the source prefix.
+	bad := make([]byte, 8000)
+	for i := range bad {
+		bad[i] = 0xEE
+	}
+	if err := os.WriteFile(filepath.Join(dstDir, "big.bin"), bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src, _ := localfs.New(srcDir)
+	dst, _ := localfs.New(dstDir)
+	item := transfer.Item{RelativePath: "big.bin", Size: int64(len(full))}
+	open, _ := src.Open(ctx, item)
+	if err := dst.Put(ctx, item, open, item.Size, nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dstDir, "big.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(got) != sha256.Sum256(full) {
+		t.Errorf("corrupt partial not corrected (got %d bytes)", len(got))
+	}
+}
