@@ -29,7 +29,27 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Test
+      - name: Start MinIO (for S3 integration tests)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 \
+            minio/minio server /data
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "MinIO ready"; break
+            fi
+            sleep 1
+          done
+          docker run --rm --network host \
+            -e AWS_ACCESS_KEY_ID=testkey -e AWS_SECRET_ACCESS_KEY=testsecret123 \
+            amazon/aws-cli --endpoint-url http://localhost:9000 s3 mb s3://tlbucket
+
+      - name: Test (unit + integration)
+        env:
+          TL_S3_ENDPOINT: http://localhost:9000
+          TL_S3_BUCKET: tlbucket
+          AWS_ACCESS_KEY_ID: testkey
+          AWS_SECRET_ACCESS_KEY: testsecret123
         run: go test -race ./...
 
   lint:
