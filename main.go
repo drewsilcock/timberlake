@@ -39,7 +39,22 @@ func newRootCmd() *cobra.Command {
 		sftpPassword string
 		sftpKey      string
 		sftpInsecure bool
+		outOfSync    bool
 	)
+
+	// Detect --out-of-sync early so the help text can drop the flavour too.
+	plain := false
+	for _, a := range os.Args[1:] {
+		if a == "--out-of-sync" {
+			plain = true
+		}
+	}
+	pick := func(themed, boring string) string {
+		if plain {
+			return boring
+		}
+		return themed
+	}
 
 	defaultS3Cfg := os.Getenv("S3CMD_CONFIG")
 	if defaultS3Cfg == "" {
@@ -50,7 +65,7 @@ func newRootCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "timberlake [flags] SOURCE DEST [JOBS]",
-		Short:   "'N SYNC-powered, resumable, parallel file sync",
+		Short:   pick("'N SYNC-powered, resumable, parallel file sync", "Resumable, parallel file sync"),
 		Version: version,
 		Long: `Timberlake syncs files between local paths, S3-compatible object stores, and
 SFTP servers, in any direction, with parallel transfers and per-file resume.
@@ -58,9 +73,8 @@ SFTP servers, in any direction, with parallel transfers and per-file resume.
 SOURCE and DEST may each be:
   /path/to/dir                       local filesystem
   s3://bucket/prefix                 S3 / Ceph RGW
-  sftp://[user@]host[:port]/path     SFTP (over an existing SSH server)
-
-Ain't no lie, baby, Bye Bye Bye!`,
+  sftp://[user@]host[:port]/path     SFTP (over an existing SSH server)` +
+			pick("\n\nAin't no lie, baby, Bye Bye Bye!", ""),
 		Example: `  timberlake /data/scan s3://my-bucket/scans/site-001 24
   timberlake /data/scan sftp://user@host/backup/scan
   timberlake s3://my-bucket/scans/site-001 /restore/site-001`,
@@ -87,6 +101,7 @@ Ain't no lie, baby, Bye Bye Bye!`,
 				S3CfgPath:    s3cfg,
 				DryRun:       dryRun,
 				VerifyOnly:   verifyOnly,
+				OutOfSync:    outOfSync,
 				SFTPPassword: sftpPassword,
 				SFTPKeyPath:  sftpKey,
 				SFTPInsecure: sftpInsecure,
@@ -121,6 +136,7 @@ Ain't no lie, baby, Bye Bye Bye!`,
 	f.StringVar(&sftpPassword, "sftp-password", "", "password for sftp:// endpoints")
 	f.StringVar(&sftpKey, "sftp-key", "", "path to a private key for sftp:// endpoints")
 	f.BoolVar(&sftpInsecure, "sftp-insecure", false, "skip SSH known_hosts verification for sftp://")
+	f.BoolVar(&outOfSync, "out-of-sync", false, "remove all 'N SYNC references from the UI")
 
 	return cmd
 }

@@ -33,7 +33,8 @@ Source/destination are now generic `Source`/`Destination` interfaces
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`
   (or `$S3CMD_CONFIG`) when present.
 - **Live TUI** — per-worker bars (committed / in-flight / read-ahead), totals,
-  rolling speed, and a running summary, with pause/resume support.
+  rolling speed, and a running summary, with pause/resume support. Pass
+  `--out-of-sync` for a plain, 'N SYNC-free interface.
 
 ## Installation
 

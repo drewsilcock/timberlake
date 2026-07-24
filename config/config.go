@@ -24,6 +24,7 @@ type AppConfig struct {
 	S3CfgPath   string
 	VerifyOnly  bool
 	DryRun      bool
+	OutOfSync   bool // strip all 'N SYNC references from the UI
 
 	// SFTP options (used when a source/destination is an sftp:// endpoint).
 	SFTPPassword string

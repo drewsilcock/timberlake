@@ -85,7 +85,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Spinner, cmd = m.Spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
-		if len(m.TriviaList) > 0 && time.Since(m.LastTriviaUpdate) >= triviaDisplayDuration {
+		if len(m.TriviaList) > 0 && !m.Config.OutOfSync && time.Since(m.LastTriviaUpdate) >= triviaDisplayDuration {
 			m.TriviaIndex = (m.TriviaIndex + 1) % len(m.TriviaList)
 			m.LastTriviaUpdate = time.Now()
 		}

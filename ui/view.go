@@ -42,6 +42,14 @@ var (
 			MarginTop(1)
 )
 
+// t returns the 'N SYNC-themed string, or the plain one when --out-of-sync is set.
+func (m Model) t(themed, plain string) string {
+	if m.Config != nil && m.Config.OutOfSync {
+		return plain
+	}
+	return themed
+}
+
 // sourceLabel / destLabel describe the endpoints for display, falling back to
 // config when the backends aren't set (e.g. in unit tests).
 func (m Model) sourceLabel() string {
@@ -64,7 +72,7 @@ func (m Model) View() string {
 	// Header
 	headerText := fmt.Sprintf("%s %s",
 		titleStyle.Render("TIMBERLAKE"),
-		subtitleStyle.Render(fmt.Sprintf("Source: %s ➔ %s 🎶 No Strings Attached", m.sourceLabel(), m.destLabel())),
+		subtitleStyle.Render(fmt.Sprintf("Source: %s ➔ %s%s", m.sourceLabel(), m.destLabel(), m.t(" 🎶 No Strings Attached", ""))),
 	)
 	b.WriteString(headerBoxStyle.Render(headerText))
 	b.WriteString("\n")
@@ -73,8 +81,9 @@ func (m Model) View() string {
 	switch m.State {
 	case StateScanning:
 		b.WriteString(panelStyle.Render(fmt.Sprintf(
-			"%s Scanning local directory tree... ('It's Gonna Be Me!')\nSource: %s",
+			"%s Scanning source%s\nSource: %s",
 			m.Spinner.View(),
+			m.t(" tree... ('It's Gonna Be Me!')", "..."),
 			statusScanningStyle.Render(m.sourceLabel()),
 		)))
 
@@ -82,7 +91,7 @@ func (m Model) View() string {
 		if m.State == StateDone {
 			b.WriteString(renderSummaryBox(m))
 			b.WriteString("\n")
-			b.WriteString(helpStyle.Render("Sync complete! Ain't no lie, Bye Bye Bye! 👋 Press [q] to exit."))
+			b.WriteString(helpStyle.Render(m.t("Sync complete! Ain't no lie, Bye Bye Bye! 👋 Press [q] to exit.", "Sync complete. Press [q] to exit.")))
 			return b.String()
 		}
 
@@ -99,7 +108,7 @@ func (m Model) View() string {
 		}
 
 		dataPanel := fmt.Sprintf(
-			"DIRTY POP (DATA) [%s] %5.1f%%\n%s / %s (Speed: %s | ETA: %s)",
+			m.t("DIRTY POP (DATA)", "DATA")+" [%s] %5.1f%%\n%s / %s (Speed: %s | ETA: %s)",
 			m.TotalBytesBar.ViewAs(totalBytesRatio),
 			totalBytesRatio*100,
 			formatBytes(transferred),
@@ -118,7 +127,7 @@ func (m Model) View() string {
 		}
 
 		filesPanel := fmt.Sprintf(
-			"IT'S GONNA BE ME [%s] %5.1f%%\n%d / %d Files (%d Uploaded, %d Skipped, %d Failed)",
+			m.t("IT'S GONNA BE ME", "FILES")+" [%s] %5.1f%%\n%d / %d Files (%d Uploaded, %d Skipped, %d Failed)",
 			m.TotalFilesBar.ViewAs(totalFilesRatio),
 			totalFilesRatio*100,
 			m.UploadedFiles+m.SkippedFiles+m.FailedFiles,
@@ -137,16 +146,16 @@ func (m Model) View() string {
 			case m.Config.DryRun:
 				statusBadge = statusPausedStyle.Render("DRY RUN (no writes)")
 			default:
-				statusBadge = statusUploadingStyle.Render("UPLOADING (\"CAN'T STOP THE FEELING!\")")
+				statusBadge = statusUploadingStyle.Render(m.t("UPLOADING (\"CAN'T STOP THE FEELING!\")", "UPLOADING"))
 			}
 		case StatePaused:
-			statusBadge = statusPausedStyle.Render("PAUSED (\"DRIVE MYSELF CRAZY\")")
+			statusBadge = statusPausedStyle.Render(m.t("PAUSED (\"DRIVE MYSELF CRAZY\")", "PAUSED"))
 		case StateError:
-			statusBadge = statusErrorStyle.Render("ERROR (\"TEARIN' UP MY HEART\") " + m.ErrorMessage)
+			statusBadge = statusErrorStyle.Render(m.t("ERROR (\"TEARIN' UP MY HEART\") ", "ERROR ") + m.ErrorMessage)
 		}
 
 		b.WriteString(panelStyle.Render(fmt.Sprintf(
-			"Status: %s | Space Cowboys: %d | Part Size: %d MiB\n\n%s\n\n%s",
+			"Status: %s | "+m.t("Space Cowboys", "Workers")+": %d | Part Size: %d MiB\n\n%s\n\n%s",
 			statusBadge,
 			m.Config.Jobs,
 			m.Config.PartSizeMB,
@@ -155,8 +164,8 @@ func (m Model) View() string {
 		)))
 		b.WriteString("\n")
 
-		// 'N SYNC Trivia Box
-		if len(m.TriviaList) > 0 {
+		// 'N SYNC Trivia Box (hidden entirely in --out-of-sync mode)
+		if len(m.TriviaList) > 0 && !m.Config.OutOfSync {
 			triviaFact := m.TriviaList[m.TriviaIndex%len(m.TriviaList)]
 			triviaHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF69B4")).Render("💡 'N SYNC TRIVIA BREAK")
 			triviaText := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAFAFA")).Render(triviaFact)
@@ -196,11 +205,11 @@ func (m Model) View() string {
 			statusBadge := w.Status
 			switch w.Status {
 			case "Uploading":
-				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#32CD32")).Render(" POP! ")
+				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#32CD32")).Render(m.t(" POP! ", " UP  "))
 			case "Checking":
-				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#FFD700")).Render(" MAY! ")
+				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#FFD700")).Render(m.t(" MAY! ", " CHK "))
 			case "Error":
-				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF4500")).Render(" TEAR ")
+				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF4500")).Render(m.t(" TEAR ", " ERR "))
 			}
 
 			shortName := filepath.Base(w.FileName)
@@ -230,7 +239,7 @@ func (m Model) View() string {
 		workersBoxHeader := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#7D56F4")).
-			Render(fmt.Sprintf("⚙ SPACE COWBOYS & ACTIVE TRANSFERS (%d/%d Active)", activeCount, len(m.Workers)))
+			Render(fmt.Sprintf("⚙ "+m.t("SPACE COWBOYS", "WORKERS")+" & ACTIVE TRANSFERS (%d/%d Active)", activeCount, len(m.Workers)))
 
 		b.WriteString(workersBoxHeader)
 		b.WriteString("\n")
@@ -239,7 +248,9 @@ func (m Model) View() string {
 
 	// Footer Help Text
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("Controls: [p/Space] Pause/Resume (\"Drive Myself Crazy\")  [↑/↓/k/j] Scroll Cowboys  [q] Quit (\"Bye Bye Bye!\")"))
+	b.WriteString(helpStyle.Render(m.t(
+		"Controls: [p/Space] Pause/Resume (\"Drive Myself Crazy\")  [↑/↓/k/j] Scroll Cowboys  [q] Quit (\"Bye Bye Bye!\")",
+		"Controls: [p/Space] Pause/Resume  [↑/↓/k/j] Scroll  [q] Quit")))
 
 	return b.String()
 }
@@ -261,7 +272,7 @@ func renderSummaryBox(m Model) string {
 	statusBadgeBg := lipgloss.Color("#00FF7F")
 	statusBadgeText := lipgloss.Color("#000000")
 	statusBadgeIcon := "✔"
-	statusTitle := "SYNC COMPLETE ('BYE BYE BYE!')"
+	statusTitle := m.t("SYNC COMPLETE ('BYE BYE BYE!')", "SYNC COMPLETE")
 
 	amber := func(title string) {
 		boxBorderColor = lipgloss.Color("#FFD700")
@@ -280,17 +291,17 @@ func renderSummaryBox(m Model) string {
 
 	switch {
 	case m.State == StateCancelled:
-		amber("SYNC CANCELLED ('BYE BYE BYE!' — cut short)")
+		amber(m.t("SYNC CANCELLED ('BYE BYE BYE!' — cut short)", "SYNC CANCELLED"))
 	case m.Config.VerifyOnly:
 		if m.FailedFiles > 0 {
 			red(fmt.Sprintf("VERIFICATION FAILED — %d discrepancy(ies)", m.FailedFiles))
 		} else {
-			statusTitle = "VERIFICATION PASSED ('N SYNC — all present)"
+			statusTitle = m.t("VERIFICATION PASSED ('N SYNC — all present)", "VERIFICATION PASSED")
 		}
 	case m.Config.DryRun:
 		amber("DRY RUN COMPLETE (no data written)")
 	case m.FailedFiles > 0:
-		red("SYNC COMPLETED WITH ERRORS ('TEARIN' UP MY HEART')")
+		red(m.t("SYNC COMPLETED WITH ERRORS ('TEARIN' UP MY HEART')", "SYNC COMPLETED WITH ERRORS"))
 	}
 
 	boxStyle := lipgloss.NewStyle().
@@ -343,10 +354,10 @@ func renderSummaryBox(m Model) string {
 	// Section 1: Target Info
 	targetSec := fmt.Sprintf(
 		"%s\n  %s %s\n  %s %s\n  %s %s",
-		secHeaderStyle.Render("📍 SYNC TARGETS & CONFIGURATION (\"No Strings Attached\")"),
+		secHeaderStyle.Render(m.t("📍 SYNC TARGETS & CONFIGURATION (\"No Strings Attached\")", "📍 SYNC TARGETS & CONFIGURATION")),
 		lblStyle.Render("Source:            "), valStyle.Render(m.sourceLabel()),
 		lblStyle.Render("Destination:       "), cyanValStyle.Render(m.destLabel()),
-		lblStyle.Render("Space Cowboys:     "), valStyle.Render(fmt.Sprintf("%d Workers | Chunk Size: %d MiB", m.Config.Jobs, m.Config.PartSizeMB)),
+		lblStyle.Render(m.t("Space Cowboys:     ", "Workers:           ")), valStyle.Render(fmt.Sprintf("%d Workers | Chunk Size: %d MiB", m.Config.Jobs, m.Config.PartSizeMB)),
 	)
 
 	// Section 2: File Statistics Cards
@@ -357,7 +368,7 @@ func renderSummaryBox(m Model) string {
 
 	uploadedCard := cardStyle.BorderForeground(lipgloss.Color("#32CD32")).Render(
 		fmt.Sprintf("%s\n%s\n%s",
-			greenValStyle.Render("Uploaded ('Bye Bye')"),
+			greenValStyle.Render(m.t("Uploaded ('Bye Bye')", "Uploaded")),
 			valStyle.Render(fmt.Sprintf("%s files", formatNumber(m.UploadedFiles))),
 			lblStyle.Render(formatBytes(m.UploadedBytes)),
 		),
@@ -365,7 +376,7 @@ func renderSummaryBox(m Model) string {
 
 	skippedCard := cardStyle.BorderForeground(lipgloss.Color("#00BFFF")).Render(
 		fmt.Sprintf("%s\n%s\n%s",
-			cyanValStyle.Render("Skipped ('N Sync)"),
+			cyanValStyle.Render(m.t("Skipped ('N Sync)", "Skipped")),
 			valStyle.Render(fmt.Sprintf("%s files", formatNumber(m.SkippedFiles))),
 			lblStyle.Render(formatBytes(m.SkippedBytes)),
 		),
@@ -379,7 +390,7 @@ func renderSummaryBox(m Model) string {
 	}
 	failedCard := cardStyle.BorderForeground(failedColor).Render(
 		fmt.Sprintf("%s\n%s\n%s",
-			failedValStyle.Render("Failed ('Cry Me a River')"),
+			failedValStyle.Render(m.t("Failed ('Cry Me a River')", "Failed")),
 			valStyle.Render(fmt.Sprintf("%s files", formatNumber(m.FailedFiles))),
 			lblStyle.Render(fmt.Sprintf("%d errors", m.FailedFiles)),
 		),
@@ -414,7 +425,7 @@ func renderSummaryBox(m Model) string {
 
 	statsSec := fmt.Sprintf(
 		"%s\n%s\n\n%s",
-		secHeaderStyle.Render("📊 FILE PROCESSING BREAKDOWN (\"Dirty Pop\")"),
+		secHeaderStyle.Render(m.t("📊 FILE PROCESSING BREAKDOWN (\"Dirty Pop\")", "📊 FILE PROCESSING BREAKDOWN")),
 		cardsRow,
 		breakoutBar,
 	)
@@ -422,17 +433,18 @@ func renderSummaryBox(m Model) string {
 	// Section 3: Performance & Throughput
 	perfSec := fmt.Sprintf(
 		"%s\n  %s %s %s\n  %s %s\n  %s %s\n  %s %s",
-		secHeaderStyle.Render("⚡ PERFORMANCE & THROUGHPUT (\"Can't Stop The Feeling!\")"),
+		secHeaderStyle.Render(m.t("⚡ PERFORMANCE & THROUGHPUT (\"Can't Stop The Feeling!\")", "⚡ PERFORMANCE & THROUGHPUT")),
 		lblStyle.Render("Total Dataset Size:"), valStyle.Render(formatBytes(m.TotalBytes)), lblStyle.Render(fmt.Sprintf("(%s total files scanned)", formatNumber(m.TotalFiles))),
 		lblStyle.Render("New Data Transferred:"), greenValStyle.Render(formatBytes(m.UploadedBytes)),
 		lblStyle.Render("Elapsed Time:"), valStyle.Render(duration.Round(time.Second).String()),
 		lblStyle.Render("Average Upload Speed:"), magentaValStyle.Render(formatSpeed(avgSpeedBps)),
 	)
 
-	quoteSec := fmt.Sprintf("\n  %s", lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#FF69B4")).Render("🎤 \"Ain't no lie, baby, Bye Bye Bye! Bringing Sync Back to S3.\""))
-
-	var parts []string
-	parts = append(parts, headerBanner, targetSec, statsSec, perfSec, quoteSec)
+	parts := []string{headerBanner, targetSec, statsSec, perfSec}
+	if !m.Config.OutOfSync {
+		quoteSec := fmt.Sprintf("\n  %s", lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#FF69B4")).Render("🎤 \"Ain't no lie, baby, Bye Bye Bye! Bringing Sync Back to S3.\""))
+		parts = append(parts, quoteSec)
+	}
 	content := strings.Join(parts, "\n\n")
 
 	return boxStyle.Render(content)
