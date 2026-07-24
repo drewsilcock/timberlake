@@ -3,6 +3,8 @@ version: '3'
 
 vars:
   BINARY_NAME: timberlake
+  # Keep in sync with .github/workflows/ci.yml (golangci-lint-action version).
+  GOLANGCI_VERSION: v2.12.2
 
 tasks:
   default:
@@ -60,9 +62,15 @@ tasks:
     cmds:
       - go vet ./...
 
+  lint:
+    desc: Run golangci-lint (pinned to GOLANGCI_VERSION, matching CI)
+    cmds:
+      - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_VERSION}} run ./...
+
   check:
-    desc: Run fmt, vet, and tests (It's Gonna Be Me!)
+    desc: Run fmt, vet, lint, and tests (It's Gonna Be Me!)
     cmds:
       - task: fmt
       - task: vet
+      - task: lint
       - task: test
