@@ -5,7 +5,7 @@
 //
 // Run it with your credentials in the environment, e.g. via a profile:
 //
-//	go run ./s3diag -bucket photogrammetry-bucket -size 200 -part-size 16 -concurrency 16
+//	go run ./s3diag -bucket my-bucket -size 200 -part-size 16 -concurrency 16
 //
 // Credentials and endpoint_url resolve from the profile (or AWS_* env vars).
 // Only server responses are logged, never the request auth header, so the

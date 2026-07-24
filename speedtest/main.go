@@ -5,7 +5,7 @@
 //
 // Run with credentials in the environment (a profile works):
 //
-//	go run ./speedtest -bucket photogrammetry-bucket
+//	go run ./speedtest -bucket my-bucket
 //
 // It uploads a temporary object, downloads it back, reports the numbers, and
 // deletes the object afterwards. No credentials are printed.

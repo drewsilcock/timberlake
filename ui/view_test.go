@@ -10,8 +10,8 @@ import (
 
 func TestRenderSummaryBox(t *testing.T) {
 	appCfg := &config.AppConfig{
-		SourceDir:   "/data/photogrammetry/site-001",
-		Destination: "s3://mybucket/scans/site-001",
+		SourceDir:   "/data/my-files/site-001",
+		Destination: "s3://my-bucket/scans/site-001",
 		Bucket:      "mybucket",
 		Prefix:      "scans/site-001",
 		Jobs:        16,

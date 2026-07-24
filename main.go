@@ -50,7 +50,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Timberlake — 'N SYNC-powered, resumable, parallel local -> Ceph RGW (S3-compatible) upload tool in Go.\n")
 		fmt.Fprintf(os.Stderr, "Ain't no lie, baby, Bye Bye Bye!\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  %s /data/scan s3://photogrammetry/scans/site-001 24\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s /data/scan s3://my-bucket/scans/site-001 24\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}

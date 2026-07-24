@@ -5,6 +5,16 @@ S3-compatible object stores such as Amazon S3 and Ceph RGW. It walks a local
 directory and uploads its contents to a bucket, skipping files that are already
 present with a matching size, and renders live progress in a terminal UI.
 
+## Status
+
+I'm using this for relatively big (few TB) transfers and it seems reliable so
+far. The code is fairly vibey – if it turns out to be useful longer-term, I'll
+probably do some re-writing.
+
+I'd like to add support for SFTP. Also, atm it only supports local disk as
+source and S3 bucket as destination, I'm going to refactor that into generic
+"Source" and "Destination" interfaces.
+
 ## Features
 
 - **Parallel uploads** — configurable worker pool (default 16) with concurrent
@@ -47,7 +57,7 @@ destination. An optional positional `JOBS` argument overrides the worker count.
 
 ```sh
 # Upload a local scan directory into a bucket prefix, using 24 workers
-timberlake /data/scan s3://photogrammetry/scans/site-001 24
+timberlake /data/scan s3://my-bucket/scans/site-001 24
 ```
 
 ### Options
