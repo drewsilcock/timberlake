@@ -177,6 +177,35 @@ func TestS3ResumeReuploadsCorruptPart(t *testing.T) {
 	assertObjectMatches(t, ctx, raw, bucket, key, data)
 }
 
+func TestS3ResumeExactPartBoundary(t *testing.T) {
+	endpoint, bucket := s3Env(t)
+	ctx := context.Background()
+	prefix := uniquePrefix()
+	raw := rawClient(t, ctx, endpoint)
+	defer cleanupPrefix(t, ctx, raw, bucket, prefix)
+
+	const partSize = 8 << 20
+	data := randomBytes(t, 3*partSize) // exactly 3 full parts (last part == partSize)
+	item := transfer.Item{RelativePath: "boundary/big.bin", Size: int64(len(data))}
+	key := s3backend.BuildKey(prefix, item.RelativePath)
+
+	// Seed parts 1 and 2 correctly, leave the upload incomplete.
+	create, err := raw.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String(key),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadPart(t, ctx, raw, bucket, key, *create.UploadId, 1, data[0:partSize])
+	uploadPart(t, ctx, raw, bucket, key, *create.UploadId, 2, data[partSize:2*partSize])
+
+	dst := newBackend(t, ctx, endpoint, bucket, prefix, 8)
+	if err := dst.Put(ctx, item, plainOpen(data), item.Size, nil); err != nil {
+		t.Fatalf("resume put: %v", err)
+	}
+	assertObjectMatches(t, ctx, raw, bucket, key, data)
+}
+
 // --- helpers ---
 
 func randomBytes(t *testing.T, n int) []byte {
