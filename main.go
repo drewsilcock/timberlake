@@ -28,6 +28,7 @@ func main() {
 func newRootCmd() *cobra.Command {
 	var (
 		jobs         int
+		uploadJobs   int
 		partSize     int64
 		endpoint     string
 		accessKey    string
@@ -93,6 +94,7 @@ SOURCE and DEST may each be:
 				SourceDir:    sourceURI,
 				Destination:  destURI,
 				Jobs:         jobs,
+				UploadJobs:   uploadJobs,
 				PartSizeMB:   partSize,
 				EndpointURL:  endpoint,
 				AccessKey:    accessKey,
@@ -124,7 +126,8 @@ SOURCE and DEST may each be:
 	}
 
 	f := cmd.Flags()
-	f.IntVarP(&jobs, "jobs", "j", 16, "number of parallel worker jobs")
+	f.IntVarP(&jobs, "jobs", "j", 16, "number of parallel worker jobs (used for destination checks and transfers)")
+	f.IntVarP(&uploadJobs, "upload-jobs", "u", 0, "max concurrent transfers; workers above this keep checking/skipping (0 = same as --jobs)")
 	f.Int64VarP(&partSize, "part-size", "p", 16, "multipart chunk size in MiB (smaller uploads faster over high-latency links)")
 	f.StringVar(&endpoint, "endpoint-url", os.Getenv("AWS_ENDPOINT_URL"), "S3 / Ceph RGW endpoint URL")
 	f.StringVar(&accessKey, "access-key", os.Getenv("AWS_ACCESS_KEY_ID"), "S3 access key ID")

@@ -18,6 +18,12 @@ type ProgramState int
 
 const (
 	StateScanning ProgramState = iota
+	// StateCatchingUp is the reconcile phase after the source scan: workers
+	// check the destination for files a previous run already transferred. On a
+	// resumed sync this is where thousands of files get skipped in quick
+	// succession, so it is rendered as its own phase rather than as upload
+	// progress that appears to leap from zero.
+	StateCatchingUp
 	StateUploading
 	StatePaused
 	StateVerification
@@ -76,10 +82,17 @@ type Model struct {
 	MsgChan   chan tea.Msg
 
 	// Timing & Speed
-	StartTime  time.Time
-	EndTime    time.Time
-	LastUpdate time.Time
-	SpeedBps   float64
+	StartTime time.Time
+	// TransferStartTime is when the first real transfer began (i.e. when the
+	// catch-up phase ended). Average speed is measured from here so a long
+	// catch-up doesn't drag the figure down.
+	TransferStartTime time.Time
+	EndTime           time.Time
+	LastUpdate        time.Time
+	SpeedBps          float64
+	// PausedFrom remembers which phase we paused out of, so resuming returns to
+	// it rather than always to StateUploading.
+	PausedFrom ProgramState
 
 	// Rolling-window upload-speed sampling (see sampleSpeed).
 	speedSamples  []speedSample

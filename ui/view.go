@@ -77,8 +77,14 @@ func (m Model) View() string {
 	b.WriteString(headerBoxStyle.Render(headerText))
 	b.WriteString("\n")
 
+	// Pausing during catch-up should keep showing the catch-up panel.
+	displayState := m.State
+	if m.State == StatePaused && m.PausedFrom == StateCatchingUp {
+		displayState = StateCatchingUp
+	}
+
 	// State-specific layout
-	switch m.State {
+	switch displayState {
 	case StateScanning:
 		b.WriteString(panelStyle.Render(fmt.Sprintf(
 			"%s Scanning source%s\nSource: %s",
@@ -86,6 +92,12 @@ func (m Model) View() string {
 			m.t(" tree... ('It's Gonna Be Me!')", "..."),
 			statusScanningStyle.Render(m.sourceLabel()),
 		)))
+
+	case StateCatchingUp:
+		b.WriteString(renderCatchUpPanel(m))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("Controls: [p/Space] Pause  [q] Quit"))
+		return b.String()
 
 	case StateUploading, StatePaused, StateDone, StateError:
 		if m.State == StateDone {
@@ -208,6 +220,8 @@ func (m Model) View() string {
 				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#32CD32")).Render(m.t(" POP! ", " UP  "))
 			case "Checking":
 				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#FFD700")).Render(m.t(" MAY! ", " CHK "))
+			case "Queued":
+				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#5A5A5A")).Render(m.t(" WAIT ", " WAIT "))
 			case "Error":
 				statusBadge = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#FF4500")).Render(m.t(" TEAR ", " ERR "))
 			}
@@ -255,6 +269,61 @@ func (m Model) View() string {
 	return b.String()
 }
 
+// renderCatchUpPanel draws the reconcile phase: the destination is being checked
+// for files a previous run already transferred. This is deliberately *not* the
+// upload view — during catch-up nothing is being transferred, so showing the
+// upload/data bars racing up from zero misrepresents what's happening.
+func renderCatchUpPanel(m Model) string {
+	checked := m.SkippedFiles + m.UploadedFiles + m.FailedFiles
+
+	ratio := float64(0)
+	if m.TotalFiles > 0 {
+		ratio = float64(checked) / float64(m.TotalFiles)
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+
+	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
+	val := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA"))
+	cyan := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00BFFF"))
+
+	header := cyan.Render("⟳ CATCHING UP WITH PREVIOUS RUN")
+	if m.State == StatePaused {
+		header = statusPausedStyle.Render("⏸ CATCH-UP PAUSED")
+	}
+
+	// Rate and ETA for the catch-up itself, not for any transfer.
+	rateText, etaText := "measuring…", "--:--"
+	if elapsed := time.Since(m.StartTime).Seconds(); elapsed >= 1 && checked > 0 {
+		rate := float64(checked) / elapsed
+		rateText = fmt.Sprintf("%s files/s", formatNumber(int64(rate)))
+		if remaining := m.TotalFiles - checked; remaining > 0 && rate > 0 {
+			etaText = (time.Duration(float64(remaining)/rate) * time.Second).Round(time.Second).String()
+		}
+	}
+
+	body := fmt.Sprintf(
+		"%s %s\n%s\n\n%s [%s] %5.1f%%\n%s\n\n  %s %s\n  %s %s\n  %s %s",
+		m.Spinner.View(),
+		header,
+		lbl.Render("Checking which files are already at the destination — nothing is being transferred yet."),
+		lbl.Render("Checked"),
+		m.TotalFilesBar.ViewAs(ratio),
+		ratio*100,
+		fmt.Sprintf("%s / %s files", val.Render(formatNumber(checked)), val.Render(formatNumber(m.TotalFiles))),
+		lbl.Render("Already at destination:"), cyan.Render(fmt.Sprintf("%s files · %s", formatNumber(m.SkippedFiles), formatBytes(m.SkippedBytes))),
+		lbl.Render("Check rate:            "), val.Render(rateText),
+		lbl.Render("Catch-up ETA:          "), val.Render(etaText),
+	)
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#00BFFF")).
+		Padding(0, 1).
+		Render(body)
+}
+
 func renderSummaryBox(m Model) string {
 	endTime := m.EndTime
 	if endTime.IsZero() {
@@ -265,7 +334,15 @@ func renderSummaryBox(m Model) string {
 		duration = time.Millisecond
 	}
 
-	avgSpeedBps := float64(m.UploadedBytes) / duration.Seconds()
+	// Average speed is measured from the first real transfer, so a long
+	// catch-up phase (which moves no bytes) doesn't deflate the figure.
+	transferDuration := duration
+	if !m.TransferStartTime.IsZero() {
+		if d := endTime.Sub(m.TransferStartTime); d > 0 {
+			transferDuration = d
+		}
+	}
+	avgSpeedBps := float64(m.UploadedBytes) / transferDuration.Seconds()
 
 	// Styles for Summary Output Box — status depends on how the run ended.
 	boxBorderColor := lipgloss.Color("#00FF7F") // Emerald green

@@ -44,10 +44,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "p", " ":
 			switch m.State {
-			case StateUploading:
+			case StateUploading, StateCatchingUp:
+				m.PausedFrom = m.State
 				m.State = StatePaused
 			case StatePaused:
-				m.State = StateUploading
+				m.State = m.PausedFrom
+				if m.State == StatePaused { // defensive: never stay paused
+					m.State = StateUploading
+				}
 			}
 
 		case "up", "k":
@@ -103,7 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.TotalFiles = int64(len(msg.Items))
 		m.TotalBytes = msg.TotalBytes
 		m.WorkQueue = msg.Items
-		m.State = StateUploading
+		// Begin in the catch-up phase; the first actual transfer promotes us to
+		// StateUploading (see the WorkerStatusMsg handler).
+		m.State = StateCatchingUp
 		m.StartTime = time.Now()
 
 		if m.TotalFiles == 0 {
@@ -150,6 +156,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				w.CommittedSize = 0
 				w.UploadedSize = 0
 				w.BufferedSize = 0
+				// The first real transfer ends the catch-up phase.
+				if m.State == StateCatchingUp {
+					m.State = StateUploading
+				}
+				if m.TransferStartTime.IsZero() {
+					m.TransferStartTime = time.Now()
+				}
 			case "Done":
 				m.UploadedFiles++
 				m.CompletedBytes += msg.Size
@@ -295,6 +308,14 @@ func startWorkerPool(m *Model) {
 	dryRun := m.Config.DryRun
 	verifyOnly := m.Config.VerifyOnly
 
+	// Transfers are gated separately from workers: every worker can race through
+	// the cheap destination checks (fast catch-up on a resumed run), while only
+	// uploadJobs of them may be moving bytes at once.
+	var uploadSem chan struct{}
+	if n := m.Config.UploadJobs; n > 0 && n < m.Config.Jobs {
+		uploadSem = make(chan struct{}, n)
+	}
+
 	for i := 0; i < m.Config.Jobs; i++ {
 		workerID := i
 		go func() {
@@ -326,7 +347,17 @@ func startWorkerPool(m *Model) {
 					continue
 				}
 
-				// Step 2: transfer (destination resumes from partial state).
+				// Step 2: wait for a transfer slot, if transfers are capped.
+				if uploadSem != nil {
+					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Queued", FileName: item.RelativePath, Size: item.Size}
+					select {
+					case uploadSem <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+				}
+
+				// Step 3: transfer (destination resumes from partial state).
 				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Uploading", FileName: item.RelativePath, Size: item.Size}
 
 				open, err := source.Open(ctx, item)
@@ -347,6 +378,9 @@ func startWorkerPool(m *Model) {
 						default:
 						}
 					})
+				}
+				if uploadSem != nil {
+					<-uploadSem
 				}
 
 				if err != nil {

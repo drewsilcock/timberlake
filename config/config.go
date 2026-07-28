@@ -15,6 +15,7 @@ type AppConfig struct {
 	Bucket      string
 	Prefix      string
 	Jobs        int
+	UploadJobs  int // max concurrent transfers; 0 or >= Jobs means "no extra limit"
 	PartSizeMB  int64
 	MaxRetries  int
 	EndpointURL string
