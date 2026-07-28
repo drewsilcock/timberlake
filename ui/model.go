@@ -38,6 +38,19 @@ type FileError struct {
 	Message      string
 }
 
+// FileRecord is one finished item, kept for the history panels.
+type FileRecord struct {
+	Name     string
+	Size     int64
+	Status   string // "Done", "Skipped", "Error"
+	Duration time.Duration
+	At       time.Time
+	WorkerID int
+}
+
+// maxHistory caps the per-worker and global history rings.
+const maxHistory = 200
+
 // speedSample is one point in the rolling upload-throughput window.
 type speedSample struct {
 	at    time.Time
@@ -56,7 +69,13 @@ type WorkerState struct {
 	BufferedSize  int64 // bytes read from disk into buffers (>= UploadedSize)
 	SpeedBps      float64
 	LastError     string
-	StartTime     time.Time
+	StartTime     time.Time // when the current file started transferring
+
+	// History of items this worker finished, newest last.
+	History []FileRecord
+	// Running totals for the worker's own throughput figure.
+	BytesMoved int64
+	FilesDone  int64
 }
 
 type Model struct {
@@ -112,6 +131,14 @@ type Model struct {
 	TriviaList       []string
 	TriviaIndex      int
 	LastTriviaUpdate time.Time
+
+	// Worker list navigation: which worker the cursor is on, and whether that
+	// worker is zoomed to a full-screen detail view.
+	SelectedWorker int
+	ZoomWorker     bool
+
+	// RecentFiles is the global history ring across all workers, newest last.
+	RecentFiles []FileRecord
 
 	// Dimensions
 	Width  int

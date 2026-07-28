@@ -77,6 +77,14 @@ func (m Model) View() string {
 	b.WriteString(headerBoxStyle.Render(headerText))
 	b.WriteString("\n")
 
+	// Zoomed worker takes over the whole screen.
+	if m.ZoomWorker && m.SelectedWorker >= 0 && m.SelectedWorker < len(m.Workers) {
+		b.WriteString(renderWorkerDetail(m, m.SelectedWorker))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("Controls: [↑/↓/k/j] Other worker  [Space/Esc] Back to list  [p] Pause  [q] Quit"))
+		return b.String()
+	}
+
 	// Pausing during catch-up should keep showing the catch-up panel.
 	displayState := m.State
 	if m.State == StatePaused && m.PausedFrom == StateCatchingUp {
@@ -194,10 +202,17 @@ func (m Model) View() string {
 		// Active Worker Progress Bars List
 		var workerLines []string
 		activeCount := 0
+		cursor := func(i int) string {
+			if i == m.SelectedWorker {
+				return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFD700")).Render("▸ ")
+			}
+			return "  "
+		}
 		for i, w := range m.Workers {
 			wIDStr := fmt.Sprintf("#%02d", i+1)
 			if w.Status == "Idle" {
-				workerLines = append(workerLines, fmt.Sprintf("%s  %-6s  %s",
+				workerLines = append(workerLines, fmt.Sprintf("%s%s  %-6s  %s",
+					cursor(i),
 					lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render(wIDStr),
 					lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("[IDLE]"),
 					lipgloss.NewStyle().Foreground(lipgloss.Color("#333333")).Render("—"),
@@ -231,7 +246,8 @@ func (m Model) View() string {
 				shortName = shortName[:21] + "..."
 			}
 
-			line := fmt.Sprintf("%s  %s [%s] %5.1f%% %-24s (%s / %s)",
+			line := fmt.Sprintf("%s%s  %s [%s] %5.1f%% %-24s (%s / %s)",
+				cursor(i),
 				lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render(wIDStr),
 				statusBadge,
 				renderBufferBar(m.WorkerBars[i].Width, w.CommittedSize, w.UploadedSize, w.BufferedSize, w.TotalSize),
@@ -244,6 +260,15 @@ func (m Model) View() string {
 		}
 
 		m.Viewport.SetContent(strings.Join(workerLines, "\n"))
+		// Keep the cursor in view as it moves through the list.
+		if h := m.Viewport.Height; h > 0 {
+			switch {
+			case m.SelectedWorker < m.Viewport.YOffset:
+				m.Viewport.SetYOffset(m.SelectedWorker)
+			case m.SelectedWorker >= m.Viewport.YOffset+h:
+				m.Viewport.SetYOffset(m.SelectedWorker - h + 1)
+			}
+		}
 
 		workersBoxStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -258,15 +283,172 @@ func (m Model) View() string {
 		b.WriteString(workersBoxHeader)
 		b.WriteString("\n")
 		b.WriteString(workersBoxStyle.Render(m.Viewport.View()))
+		b.WriteString("\n")
+		b.WriteString(renderHistoryPanel(m))
 	}
 
 	// Footer Help Text
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render(m.t(
-		"Controls: [p/Space] Pause/Resume (\"Drive Myself Crazy\")  [↑/↓/k/j] Scroll Cowboys  [q] Quit (\"Bye Bye Bye!\")",
-		"Controls: [p/Space] Pause/Resume  [↑/↓/k/j] Scroll  [q] Quit")))
+		"Controls: [p] Pause/Resume (\"Drive Myself Crazy\")  [↑/↓/k/j] Select Cowboy  [Space] Zoom  [q] Quit (\"Bye Bye Bye!\")",
+		"Controls: [p] Pause/Resume  [↑/↓/k/j] Select worker  [Space] Zoom  [q] Quit")))
 
 	return b.String()
+}
+
+// renderWorkerDetail is the full-screen view for a single worker: what it is
+// transferring right now, its own throughput, and the files it has finished.
+func renderWorkerDetail(m Model, idx int) string {
+	w := m.Workers[idx]
+
+	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
+	val := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA"))
+	purple := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4"))
+
+	header := purple.Render(fmt.Sprintf("🔍 %s #%02d — DETAIL",
+		strings.ToUpper(m.t("SPACE COWBOY", "WORKER")), idx+1))
+
+	// Current item
+	var current string
+	if w.Status == "Idle" || w.FileName == "" {
+		current = lbl.Render("  Idle — waiting for the next file.")
+	} else {
+		ratio := float64(0)
+		if w.TotalSize > 0 {
+			ratio = float64(w.UploadedSize) / float64(w.TotalSize)
+		}
+		if ratio > 1 {
+			ratio = 1
+		}
+		barWidth := m.Width - 20
+		if barWidth < 20 {
+			barWidth = 20
+		}
+
+		// Throughput for the file in flight.
+		rate := "—"
+		if w.Status == "Uploading" && !w.StartTime.IsZero() {
+			if secs := time.Since(w.StartTime).Seconds(); secs > 0.5 {
+				rate = formatSpeed(float64(w.CommittedSize) / secs)
+			}
+		}
+		eta := "--:--"
+		if w.Status == "Uploading" && !w.StartTime.IsZero() {
+			if secs := time.Since(w.StartTime).Seconds(); secs > 0.5 && w.CommittedSize > 0 {
+				bps := float64(w.CommittedSize) / secs
+				eta = formatETA(w.TotalSize-w.CommittedSize, bps)
+			}
+		}
+
+		current = fmt.Sprintf(
+			"  %s %s\n  %s %s\n\n  [%s] %5.1f%%\n\n  %s %s   %s %s   %s %s\n  %s %s   %s %s",
+			lbl.Render("File:  "), val.Render(w.FileName),
+			lbl.Render("Status:"), val.Render(w.Status),
+			renderBufferBar(barWidth, w.CommittedSize, w.UploadedSize, w.BufferedSize, w.TotalSize),
+			ratio*100,
+			lbl.Render("Committed:"), val.Render(formatBytes(w.CommittedSize)),
+			lbl.Render("Sent:"), val.Render(formatBytes(w.UploadedSize)),
+			lbl.Render("Size:"), val.Render(formatBytes(w.TotalSize)),
+			lbl.Render("Rate:     "), val.Render(rate),
+			lbl.Render("ETA: "), val.Render(eta),
+		)
+	}
+
+	// Lifetime stats for this worker.
+	lifetime := fmt.Sprintf("  %s %s   %s %s",
+		lbl.Render("Files finished:"), val.Render(formatNumber(w.FilesDone)),
+		lbl.Render("Data moved:"), val.Render(formatBytes(w.BytesMoved)),
+	)
+
+	// This worker's file history, newest first.
+	const show = 12
+	hist := w.History
+	if len(hist) > show {
+		hist = hist[len(hist)-show:]
+	}
+	histLines := []string{purple.Render("  History (newest first)")}
+	if len(hist) == 0 {
+		histLines = append(histLines, lbl.Render("    (nothing yet)"))
+	}
+	for i := len(hist) - 1; i >= 0; i-- {
+		r := hist[i]
+		var tag string
+		switch r.Status {
+		case "Done":
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#32CD32")).Render("✔")
+		case "Skipped":
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#00BFFF")).Render("•")
+		default:
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4500")).Render("✖")
+		}
+		took := ""
+		if r.Duration > 0 {
+			took = fmt.Sprintf(" in %s", r.Duration.Round(time.Second))
+		}
+		name := r.Name
+		if len(name) > 46 {
+			name = "..." + name[len(name)-43:]
+		}
+		histLines = append(histLines, fmt.Sprintf("    %s %-46s %10s%s",
+			tag, name, formatBytes(r.Size), lbl.Render(took)))
+	}
+
+	body := strings.Join([]string{
+		header, "", current, "", lifetime, "", strings.Join(histLines, "\n"),
+	}, "\n")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Padding(0, 1).
+		Render(body)
+}
+
+// renderHistoryPanel shows the most recently finished items across all workers.
+func renderHistoryPanel(m Model) string {
+	const show = 5
+	hist := m.RecentFiles
+	if len(hist) > show {
+		hist = hist[len(hist)-show:]
+	}
+
+	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00BFFF")).
+		Render(fmt.Sprintf("🕘 RECENT FILES (%s remaining)",
+			formatNumber(m.TotalFiles-(m.UploadedFiles+m.SkippedFiles+m.FailedFiles))))
+
+	var lines []string
+	if len(hist) == 0 {
+		lines = append(lines, lbl.Render("  (nothing finished yet)"))
+	}
+	// Newest first for reading.
+	for i := len(hist) - 1; i >= 0; i-- {
+		r := hist[i]
+		var tag string
+		switch r.Status {
+		case "Done":
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#32CD32")).Render("✔ sent   ")
+		case "Skipped":
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#00BFFF")).Render("• skipped")
+		default:
+			tag = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4500")).Render("✖ failed ")
+		}
+		name := filepath.Base(r.Name)
+		if len(name) > 32 {
+			name = name[:29] + "..."
+		}
+		took := ""
+		if r.Duration > 0 {
+			took = fmt.Sprintf("  in %s", r.Duration.Round(time.Second))
+		}
+		lines = append(lines, fmt.Sprintf("  %s  %-32s %10s%s", tag, name, formatBytes(r.Size), lbl.Render(took)))
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5A5A5A")).
+		Padding(0, 1).
+		Render(header + "\n" + strings.Join(lines, "\n"))
 }
 
 // renderCatchUpPanel draws the reconcile phase: the destination is being checked

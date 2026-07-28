@@ -14,6 +14,31 @@ import (
 // How long each 'N SYNC trivia fact stays on screen before rotating.
 const triviaDisplayDuration = 45 * time.Second
 
+// recordHistory appends a finished item to the worker's history and the global
+// ring, both capped at maxHistory entries.
+func (m *Model) recordHistory(w *WorkerState, msg WorkerStatusMsg, status string) {
+	var dur time.Duration
+	if status == "Done" && !w.StartTime.IsZero() {
+		dur = time.Since(w.StartTime)
+	}
+	rec := FileRecord{
+		Name:     msg.FileName,
+		Size:     msg.Size,
+		Status:   status,
+		Duration: dur,
+		At:       time.Now(),
+		WorkerID: w.ID,
+	}
+	w.History = append(w.History, rec)
+	if len(w.History) > maxHistory {
+		w.History = w.History[len(w.History)-maxHistory:]
+	}
+	m.RecentFiles = append(m.RecentFiles, rec)
+	if len(m.RecentFiles) > maxHistory {
+		m.RecentFiles = m.RecentFiles[len(m.RecentFiles)-maxHistory:]
+	}
+}
+
 // resetWorker returns a worker slot to idle, clearing per-file progress.
 func resetWorker(w *WorkerState) {
 	w.Status = "Idle"
@@ -42,7 +67,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
-		case "p", " ":
+		case "p":
 			switch m.State {
 			case StateUploading, StateCatchingUp:
 				m.PausedFrom = m.State
@@ -54,11 +79,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case " ", "enter":
+			// Zoom the selected worker to a full-screen detail view.
+			if len(m.Workers) > 0 {
+				m.ZoomWorker = !m.ZoomWorker
+			}
+
+		case "esc":
+			m.ZoomWorker = false
+
 		case "up", "k":
-			m.Viewport.ScrollUp(1)
+			if m.SelectedWorker > 0 {
+				m.SelectedWorker--
+			}
 
 		case "down", "j":
-			m.Viewport.ScrollDown(1)
+			if m.SelectedWorker < len(m.Workers)-1 {
+				m.SelectedWorker++
+			}
+
+		case "home", "g":
+			m.SelectedWorker = 0
+
+		case "end", "G":
+			m.SelectedWorker = len(m.Workers) - 1
 		}
 
 	case tea.WindowSizeMsg:
@@ -163,17 +207,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.TransferStartTime.IsZero() {
 					m.TransferStartTime = time.Now()
 				}
+				w.StartTime = time.Now()
 			case "Done":
 				m.UploadedFiles++
 				m.CompletedBytes += msg.Size
+				w.BytesMoved += msg.Size
+				w.FilesDone++
+				m.recordHistory(w, msg, "Done")
 				resetWorker(w)
 			case "Skipped":
 				m.SkippedFiles++
 				m.SkippedBytes += msg.Size
+				w.FilesDone++
+				m.recordHistory(w, msg, "Skipped")
 				resetWorker(w)
 			case "Error":
 				m.FailedFiles++
 				m.Errors = append(m.Errors, FileError{RelativePath: msg.FileName, Message: msg.Err})
+				m.recordHistory(w, msg, "Error")
 				resetWorker(w)
 			}
 		}
