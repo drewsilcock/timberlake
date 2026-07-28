@@ -15,6 +15,36 @@ import (
 // How long each 'N SYNC trivia fact stays on screen before rotating.
 const triviaDisplayDuration = 45 * time.Second
 
+// catchUpETAInterval is how often the catch-up ETA is allowed to change. The
+// underlying estimate moves constantly; refreshing it every frame is visually
+// noisy, so we hold each value for a few seconds.
+const catchUpETAInterval = 5 * time.Second
+
+// refreshCatchUpETA recomputes the debounced catch-up ETA string.
+func (m *Model) refreshCatchUpETA() {
+	if m.State != StateCatchingUp && m.PausedFrom != StateCatchingUp {
+		return
+	}
+	if time.Since(m.catchUpETAAt) < catchUpETAInterval && m.CatchUpETA != "" {
+		return
+	}
+	m.catchUpETAAt = time.Now()
+
+	checked := m.SkippedFiles + m.UploadedFiles + m.FailedFiles
+	elapsed := time.Since(m.StartTime).Seconds()
+	if elapsed < 1 || checked == 0 {
+		m.CatchUpETA = "measuring…"
+		return
+	}
+	rate := float64(checked) / elapsed
+	remaining := m.TotalFiles - checked
+	if remaining <= 0 || rate <= 0 {
+		m.CatchUpETA = "—"
+		return
+	}
+	m.CatchUpETA = (time.Duration(float64(remaining)/rate) * time.Second).Round(time.Second).String()
+}
+
 // startTunnel launches the quick tunnel and publishes its URL when ready.
 func (m Model) startTunnel() {
 	if m.Web == nil || m.Tunnel == nil {
@@ -128,6 +158,28 @@ func (m *Model) recordHistory(w *WorkerState, msg WorkerStatusMsg, status string
 	}
 }
 
+// sampleRate updates the worker's smoothed transfer rate from committed bytes.
+func (w *WorkerState) sampleRate(committed int64) {
+	now := time.Now()
+	if w.lastSampleAt.IsZero() {
+		w.lastCommitted, w.lastSampleAt = committed, now
+		return
+	}
+	dt := now.Sub(w.lastSampleAt).Seconds()
+	if dt < 1 {
+		return
+	}
+	if delta := committed - w.lastCommitted; delta >= 0 {
+		inst := float64(delta) / dt
+		if w.SpeedBps == 0 {
+			w.SpeedBps = inst
+		} else {
+			w.SpeedBps = 0.7*w.SpeedBps + 0.3*inst // EMA
+		}
+	}
+	w.lastCommitted, w.lastSampleAt = committed, now
+}
+
 // resetWorker returns a worker slot to idle, clearing per-file progress.
 func resetWorker(w *WorkerState) {
 	w.Status = "Idle"
@@ -136,6 +188,9 @@ func resetWorker(w *WorkerState) {
 	w.BufferedSize = 0
 	w.TotalSize = 0
 	w.FileName = ""
+	w.SpeedBps = 0
+	w.lastCommitted = 0
+	w.lastSampleAt = time.Time{}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -176,6 +231,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "esc":
 			m.ZoomWorker = false
+
+		case "tab":
+			if m.FocusedPane == PaneWorkers {
+				m.FocusedPane = PaneRecent
+			} else {
+				m.FocusedPane = PaneWorkers
+			}
+
+		case "shift+tab":
+			if m.FocusedPane == PaneRecent {
+				m.FocusedPane = PaneWorkers
+			} else {
+				m.FocusedPane = PaneRecent
+			}
 
 		case "up", "k":
 			if m.SelectedWorker > 0 {
@@ -242,6 +311,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tea.MouseMsg:
+		// Clicking a panel focuses it (and clicking a worker row selects it).
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && m.layout != nil {
+			switch {
+			case msg.Y >= m.layout.recentTop && msg.Y < m.layout.recentBottom:
+				m.FocusedPane = PaneRecent
+			case msg.Y >= m.layout.workersTop && msg.Y < m.layout.workersBottom:
+				m.FocusedPane = PaneWorkers
+				// Rows start after the panel header and top border.
+				if row := msg.Y - m.layout.workersTop - 2 + m.Viewport.YOffset; row >= 0 && row < len(m.Workers) {
+					m.SelectedWorker = row
+				}
+			}
+		}
+
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
@@ -276,6 +360,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.sampleSpeed()
+		m.refreshCatchUpETA()
 		m.publishWeb()
 
 	case ScanCompleteMsg:
@@ -315,6 +400,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.FileName != "" {
 				w.FileName = msg.FileName
 			}
+			w.sampleRate(msg.CommittedSize)
 		}
 
 		m.recalcUploadedBytes()
@@ -338,6 +424,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				w.CommittedSize = 0
 				w.UploadedSize = 0
 				w.BufferedSize = 0
+				w.SpeedBps = 0
+				w.lastCommitted = 0
+				w.lastSampleAt = time.Time{}
 				// The first real transfer ends the catch-up phase.
 				if m.State == StateCatchingUp {
 					m.State = StateUploading

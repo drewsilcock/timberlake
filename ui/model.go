@@ -39,6 +39,21 @@ type FileError struct {
 	Message      string
 }
 
+// layoutBounds is the last-rendered vertical extent of the focusable panels,
+// used to route mouse clicks to the right pane.
+type layoutBounds struct {
+	workersTop, workersBottom int
+	recentTop, recentBottom   int
+}
+
+// Pane identifies a focusable panel in the dashboard.
+type Pane int
+
+const (
+	PaneWorkers Pane = iota
+	PaneRecent
+)
+
 // FileRecord is one finished item, kept for the history panels.
 type FileRecord struct {
 	Name     string
@@ -77,6 +92,12 @@ type WorkerState struct {
 	// Running totals for the worker's own throughput figure.
 	BytesMoved int64
 	FilesDone  int64
+
+	// Smoothed rate sampling for this worker's current file. Using an average
+	// since the file started made the ETA climb whenever throughput dipped,
+	// so we track a recent rate instead.
+	lastCommitted int64
+	lastSampleAt  time.Time
 }
 
 type Model struct {
@@ -114,6 +135,11 @@ type Model struct {
 	// it rather than always to StateUploading.
 	PausedFrom ProgramState
 
+	// Catch-up ETA is refreshed on a slow cadence: recomputing it every frame
+	// made the number flicker distractingly.
+	CatchUpETA   string
+	catchUpETAAt time.Time
+
 	// Rolling-window upload-speed sampling (see sampleSpeed).
 	speedSamples  []speedSample
 	lastSpeedTime time.Time
@@ -150,6 +176,15 @@ type Model struct {
 
 	// RecentFiles is the global history ring across all workers, newest last.
 	RecentFiles []FileRecord
+
+	// FocusedPane is which panel Tab has focus on; the focused pane is given
+	// more room and a highlighted border.
+	FocusedPane Pane
+
+	// layout records where panels were drawn so mouse clicks can be hit-tested.
+	// It is a pointer so the value-copied Model shares one instance between
+	// View (which writes it) and Update (which reads it).
+	layout *layoutBounds
 
 	// Dimensions
 	Width  int
@@ -296,6 +331,7 @@ func InitialModel(appCfg *config.AppConfig, source transfer.Source, dest transfe
 		TriviaList:       NSyncTrivia,
 		TriviaIndex:      0,
 		LastTriviaUpdate: time.Now(),
+		layout:           &layoutBounds{},
 		Ctx:              ctx,
 		Cancel:           cancel,
 		StartTime:        time.Now(),

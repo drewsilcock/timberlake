@@ -80,14 +80,6 @@ func (m Model) View() string {
 	b.WriteString(headerBoxStyle.Render(headerText))
 	b.WriteString("\n")
 
-	// Zoomed worker takes over the whole screen.
-	if m.ZoomWorker && m.SelectedWorker >= 0 && m.SelectedWorker < len(m.Workers) {
-		b.WriteString(renderWorkerDetail(m, m.SelectedWorker))
-		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("Controls: [↑/↓/k/j] Other worker  [Space/Esc] Back to list  [p] Pause  [q] Quit"))
-		return b.String()
-	}
-
 	// Pausing during catch-up should keep showing the catch-up panel.
 	displayState := m.State
 	if m.State == StatePaused && m.PausedFrom == StateCatchingUp {
@@ -177,17 +169,17 @@ func (m Model) View() string {
 			statusBadge = statusErrorStyle.Render(m.t("ERROR (\"TEARIN' UP MY HEART\") ", "ERROR ") + m.ErrorMessage)
 		}
 
-		b.WriteString(panelStyle.Render(fmt.Sprintf(
+		statusPanel := panelStyle.Render(fmt.Sprintf(
 			"Status: %s | "+m.t("Space Cowboys", "Workers")+": %d | Part Size: %d MiB\n\n%s\n\n%s",
 			statusBadge,
 			m.Config.Jobs,
 			m.Config.PartSizeMB,
 			dataPanel,
 			filesPanel,
-		)))
-		b.WriteString("\n")
+		))
 
 		// 'N SYNC Trivia Box (hidden entirely in --out-of-sync mode)
+		triviaPanel := ""
 		if len(m.TriviaList) > 0 && !m.Config.OutOfSync {
 			triviaFact := m.TriviaList[m.TriviaIndex%len(m.TriviaList)]
 			triviaHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF69B4")).Render("💡 'N SYNC TRIVIA BREAK")
@@ -198,8 +190,7 @@ func (m Model) View() string {
 				BorderForeground(lipgloss.Color("#FF69B4")).
 				Padding(0, 1)
 
-			b.WriteString(triviaBoxStyle.Render(fmt.Sprintf("%s\n%s", triviaHeader, triviaText)))
-			b.WriteString("\n\n")
+			triviaPanel = triviaBoxStyle.Render(fmt.Sprintf("%s\n%s", triviaHeader, triviaText))
 		}
 
 		// Active Worker Progress Bars List
@@ -262,43 +253,131 @@ func (m Model) View() string {
 			workerLines = append(workerLines, line)
 		}
 
-		m.Viewport.SetContent(strings.Join(workerLines, "\n"))
-		// Keep the cursor in view as it moves through the list.
-		if h := m.Viewport.Height; h > 0 {
-			switch {
-			case m.SelectedWorker < m.Viewport.YOffset:
-				m.Viewport.SetYOffset(m.SelectedWorker)
-			case m.SelectedWorker >= m.Viewport.YOffset+h:
-				m.Viewport.SetYOffset(m.SelectedWorker - h + 1)
-			}
+		// The worker panel shows either the list or, when zoomed, the detail for
+		// the selected worker — inline, so the rest of the dashboard stays put.
+		panelBody := strings.Join(workerLines, "\n")
+		if m.ZoomWorker && m.SelectedWorker >= 0 && m.SelectedWorker < len(m.Workers) {
+			panelBody = renderWorkerDetail(m, m.SelectedWorker)
 		}
 
 		workersBoxStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#7D56F4")).
+			BorderForeground(focusColor(m, PaneWorkers)).
 			Padding(0, 1)
 
+		zoomHint := ""
+		if m.ZoomWorker {
+			zoomHint = " — zoomed, [Space] back"
+		}
 		workersBoxHeader := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#7D56F4")).
-			Render(fmt.Sprintf("⚙ "+m.t("SPACE COWBOYS", "WORKERS")+" & ACTIVE TRANSFERS (%d/%d Active)", activeCount, len(m.Workers)))
+			Foreground(focusColor(m, PaneWorkers)).
+			Render(fmt.Sprintf("⚙ "+m.t("SPACE COWBOYS", "WORKERS")+" & ACTIVE TRANSFERS (%d/%d Active)%s",
+				activeCount, len(m.Workers), zoomHint))
+
+		// Everything except the worker panel has a fixed height, so measure it
+		// and give the viewport exactly the space that is left. Without this the
+		// panel overflows the terminal and scrolls the header off the top.
+		qrPanel := ""
+		if m.ShowQR {
+			qrPanel = renderQRPanel(m)
+		}
+		historyPanel := renderHistoryPanel(m)
+		help := helpStyle.Render(m.t(
+			"Controls: [p] Pause  [↑/↓/k/j] Select  [Space] Zoom  [Tab] Focus pane  [r] QR  [q] Quit",
+			"Controls: [p] Pause  [↑/↓/k/j] Select  [Space] Zoom  [Tab] Focus pane  [r] QR  [q] Quit"))
+
+		// Budget the vertical space. The header, status, worker panel and help
+		// line are essential; trivia, recent files and the QR panel are dropped
+		// (in that order of preference) when the terminal is too short.
+		const minViewport = 3
+		essential := lipgloss.Height(b.String()) + lipgloss.Height(statusPanel) +
+			lipgloss.Height(help) + lipgloss.Height(workersBoxHeader) + 4 // borders + spacing
+
+		budget := m.Height
+		if budget <= 0 {
+			budget = essential + lipgloss.Height(panelBody) +
+				lipgloss.Height(historyPanel) + lipgloss.Height(triviaPanel) + lipgloss.Height(qrPanel) + 3
+		}
+		remaining := budget - essential - minViewport
+
+		keep := func(panel string) bool {
+			if panel == "" {
+				return false
+			}
+			if h := lipgloss.Height(panel) + 1; h <= remaining {
+				remaining -= h
+				return true
+			}
+			return false
+		}
+		// Recent files first: it is the more useful of the optional panels.
+		if !keep(historyPanel) {
+			historyPanel = ""
+		}
+		if !keep(qrPanel) {
+			qrPanel = ""
+		}
+		if !keep(triviaPanel) {
+			triviaPanel = ""
+		}
+
+		avail := minViewport + max(0, remaining)
+		if h := lipgloss.Height(panelBody); avail > h {
+			avail = h
+		}
+		if avail < 1 {
+			avail = 1
+		}
+		m.Viewport.Height = avail
+		m.Viewport.SetContent(panelBody)
+
+		// Keep the cursor in view as it moves through the list.
+		if !m.ZoomWorker && m.Viewport.Height > 0 {
+			switch {
+			case m.SelectedWorker < m.Viewport.YOffset:
+				m.Viewport.SetYOffset(m.SelectedWorker)
+			case m.SelectedWorker >= m.Viewport.YOffset+m.Viewport.Height:
+				m.Viewport.SetYOffset(m.SelectedWorker - m.Viewport.Height + 1)
+			}
+		}
+
+		b.WriteString(statusPanel)
+		b.WriteString("\n")
+		if triviaPanel != "" {
+			b.WriteString(triviaPanel)
+			b.WriteString("\n")
+		}
+
+		// Record where each focusable panel lands so clicks can be routed.
+		workersBox := workersBoxStyle.Render(m.Viewport.View())
+		if m.layout != nil {
+			top := lipgloss.Height(b.String())
+			m.layout.workersTop = top
+			m.layout.workersBottom = top + lipgloss.Height(workersBoxHeader) + lipgloss.Height(workersBox)
+			m.layout.recentTop = m.layout.workersBottom
+			m.layout.recentBottom = m.layout.recentTop + lipgloss.Height(historyPanel)
+		}
 
 		b.WriteString(workersBoxHeader)
 		b.WriteString("\n")
-		b.WriteString(workersBoxStyle.Render(m.Viewport.View()))
+		b.WriteString(workersBox)
 		b.WriteString("\n")
-		b.WriteString(renderHistoryPanel(m))
-		if m.ShowQR {
+		b.WriteString(historyPanel)
+		if qrPanel != "" {
 			b.WriteString("\n")
-			b.WriteString(renderQRPanel(m))
+			b.WriteString(qrPanel)
 		}
+		b.WriteString("\n")
+		b.WriteString(help)
+		return b.String()
 	}
 
 	// Footer Help Text
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render(m.t(
-		"Controls: [p] Pause/Resume (\"Drive Myself Crazy\")  [↑/↓/k/j] Select Cowboy  [Space] Zoom  [q] Quit (\"Bye Bye Bye!\")",
-		"Controls: [p] Pause/Resume  [↑/↓/k/j] Select worker  [Space] Zoom  [q] Quit")))
+		"Controls: [p] Pause/Resume (\"Drive Myself Crazy\")  [q] Quit (\"Bye Bye Bye!\")",
+		"Controls: [p] Pause/Resume  [q] Quit")))
 
 	return b.String()
 }
@@ -414,23 +493,20 @@ func renderWorkerDetail(m Model, idx int) string {
 			barWidth = 20
 		}
 
-		// Throughput for the file in flight.
-		rate := "—"
-		if w.Status == "Uploading" && !w.StartTime.IsZero() {
-			if secs := time.Since(w.StartTime).Seconds(); secs > 0.5 {
-				rate = formatSpeed(float64(w.CommittedSize) / secs)
-			}
+		// Rate comes from the smoothed per-worker sampler; ETA is derived from
+		// it, and elapsed is reported separately (they are different things).
+		rate, eta := "—", "--:--"
+		if w.SpeedBps > 0 {
+			rate = formatSpeed(w.SpeedBps)
+			eta = formatETA(w.TotalSize-w.CommittedSize, w.SpeedBps)
 		}
-		eta := "--:--"
-		if w.Status == "Uploading" && !w.StartTime.IsZero() {
-			if secs := time.Since(w.StartTime).Seconds(); secs > 0.5 && w.CommittedSize > 0 {
-				bps := float64(w.CommittedSize) / secs
-				eta = formatETA(w.TotalSize-w.CommittedSize, bps)
-			}
+		elapsed := "—"
+		if !w.StartTime.IsZero() {
+			elapsed = time.Since(w.StartTime).Round(time.Second).String()
 		}
 
 		current = fmt.Sprintf(
-			"  %s %s\n  %s %s\n\n  [%s] %5.1f%%\n\n  %s %s   %s %s   %s %s\n  %s %s   %s %s",
+			"  %s %s\n  %s %s\n\n  [%s] %5.1f%%\n\n  %s %s   %s %s   %s %s\n  %s %s   %s %s   %s %s",
 			lbl.Render("File:  "), val.Render(w.FileName),
 			lbl.Render("Status:"), val.Render(w.Status),
 			renderBufferBar(barWidth, w.CommittedSize, w.UploadedSize, w.BufferedSize, w.TotalSize),
@@ -439,7 +515,8 @@ func renderWorkerDetail(m Model, idx int) string {
 			lbl.Render("Sent:"), val.Render(formatBytes(w.UploadedSize)),
 			lbl.Render("Size:"), val.Render(formatBytes(w.TotalSize)),
 			lbl.Render("Rate:     "), val.Render(rate),
-			lbl.Render("ETA: "), val.Render(eta),
+			lbl.Render("Elapsed:"), val.Render(elapsed),
+			lbl.Render("ETA:"), val.Render(eta),
 		)
 	}
 
@@ -495,16 +572,24 @@ func renderWorkerDetail(m Model, idx int) string {
 
 // renderHistoryPanel shows the most recently finished items across all workers.
 func renderHistoryPanel(m Model) string {
-	const show = 5
+	// The focused pane gets more rows.
+	show := 5
+	if m.FocusedPane == PaneRecent {
+		show = 18
+	}
 	hist := m.RecentFiles
 	if len(hist) > show {
 		hist = hist[len(hist)-show:]
 	}
 
 	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00BFFF")).
-		Render(fmt.Sprintf("🕘 RECENT FILES (%s remaining)",
-			formatNumber(m.TotalFiles-(m.UploadedFiles+m.SkippedFiles+m.FailedFiles))))
+	hint := ""
+	if m.FocusedPane != PaneRecent {
+		hint = " — [Tab] to expand"
+	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(focusColor(m, PaneRecent)).
+		Render(fmt.Sprintf("🕘 RECENT FILES (%s remaining)%s",
+			formatNumber(m.TotalFiles-(m.UploadedFiles+m.SkippedFiles+m.FailedFiles)), hint))
 
 	var lines []string
 	if len(hist) == 0 {
@@ -535,9 +620,20 @@ func renderHistoryPanel(m Model) string {
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5A5A5A")).
+		BorderForeground(focusColor(m, PaneRecent)).
 		Padding(0, 1).
 		Render(header + "\n" + strings.Join(lines, "\n"))
+}
+
+// focusColor highlights the pane that currently has Tab focus.
+func focusColor(m Model, p Pane) lipgloss.Color {
+	if m.FocusedPane == p {
+		return lipgloss.Color("#FFD700")
+	}
+	if p == PaneWorkers {
+		return lipgloss.Color("#7D56F4")
+	}
+	return lipgloss.Color("#5A5A5A")
 }
 
 // renderCatchUpPanel draws the reconcile phase: the destination is being checked
@@ -559,19 +655,20 @@ func renderCatchUpPanel(m Model) string {
 	val := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA"))
 	cyan := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00BFFF"))
 
-	header := cyan.Render("⟳ CATCHING UP WITH PREVIOUS RUN")
+	header := cyan.Render(" ⟳ CATCHING UP WITH PREVIOUS RUN")
 	if m.State == StatePaused {
-		header = statusPausedStyle.Render("⏸ CATCH-UP PAUSED")
+		header = statusPausedStyle.Render(" ⏸ CATCH-UP PAUSED")
 	}
 
-	// Rate and ETA for the catch-up itself, not for any transfer.
-	rateText, etaText := "measuring…", "--:--"
+	// Rate is cheap to recompute; the ETA is debounced in Update so it doesn't
+	// flicker on every frame.
+	rateText := "measuring…"
 	if elapsed := time.Since(m.StartTime).Seconds(); elapsed >= 1 && checked > 0 {
-		rate := float64(checked) / elapsed
-		rateText = fmt.Sprintf("%s files/s", formatNumber(int64(rate)))
-		if remaining := m.TotalFiles - checked; remaining > 0 && rate > 0 {
-			etaText = (time.Duration(float64(remaining)/rate) * time.Second).Round(time.Second).String()
-		}
+		rateText = fmt.Sprintf("%s files/s", formatNumber(int64(float64(checked)/elapsed)))
+	}
+	etaText := m.CatchUpETA
+	if etaText == "" {
+		etaText = "measuring…"
 	}
 
 	body := fmt.Sprintf(
@@ -746,29 +843,40 @@ func renderSummaryBox(m Model) string {
 
 	cardsRow := lipgloss.JoinHorizontal(lipgloss.Top, uploadedCard, " ", skippedCard, " ", failedCard)
 
-	// Breakout bar
+	// Breakout bar: uploaded, skipped, failed, then whatever was never reached.
+	// The unprocessed remainder gets its own dim segment — folding it into the
+	// "uploaded" segment previously made a run that uploaded nothing look
+	// two-thirds green.
 	breakoutBar := ""
 	if m.TotalFiles > 0 {
 		width := 36
-		uW := int(float64(m.UploadedFiles) / float64(m.TotalFiles) * float64(width))
-		sW := int(float64(m.SkippedFiles) / float64(m.TotalFiles) * float64(width))
-		fW := int(float64(m.FailedFiles) / float64(m.TotalFiles) * float64(width))
-		rem := width - (uW + sW + fW)
-		if rem > 0 {
-			uW += rem
+		cells := func(n int64) int {
+			return int(float64(n) / float64(m.TotalFiles) * float64(width))
 		}
-		uBar := greenValStyle.Render(strings.Repeat("█", uW))
-		sBar := cyanValStyle.Render(strings.Repeat("█", sW))
-		fBar := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4500")).Render(strings.Repeat("█", fW))
+		uW, sW, fW := cells(m.UploadedFiles), cells(m.SkippedFiles), cells(m.FailedFiles)
+		if uW+sW+fW > width {
+			fW = max(0, width-uW-sW)
+		}
+		rem := max(0, width-(uW+sW+fW))
 
 		uPct := float64(m.UploadedFiles) / float64(m.TotalFiles) * 100
 		sPct := float64(m.SkippedFiles) / float64(m.TotalFiles) * 100
+		rPct := float64(m.TotalFiles-(m.UploadedFiles+m.SkippedFiles+m.FailedFiles)) /
+			float64(m.TotalFiles) * 100
 
-		breakoutBar = fmt.Sprintf("  %s [%s%s%s] %.1f%% uploaded • %.1f%% skipped",
-			lblStyle.Render("Breakout:"),
-			uBar, sBar, fBar,
-			uPct, sPct,
+		bar := greenValStyle.Render(strings.Repeat("█", uW)) +
+			cyanValStyle.Render(strings.Repeat("█", sW)) +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4500")).Render(strings.Repeat("█", fW)) +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#3A3A3A")).Render(strings.Repeat("█", rem))
+
+		legend := fmt.Sprintf("%s %.1f%% uploaded  %s %.1f%% skipped  %s %.1f%% not reached",
+			greenValStyle.Render("█"), uPct,
+			cyanValStyle.Render("█"), sPct,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#3A3A3A")).Render("█"), rPct,
 		)
+
+		breakoutBar = fmt.Sprintf("  %s [%s]\n  %s",
+			lblStyle.Render("Breakout:"), bar, lblStyle.Render(legend))
 	}
 
 	statsSec := fmt.Sprintf(

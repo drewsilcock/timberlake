@@ -143,7 +143,7 @@ SOURCE and DEST may each be:
 	f.StringVar(&sftpKey, "sftp-key", "", "path to a private key for sftp:// endpoints")
 	f.BoolVar(&sftpInsecure, "sftp-insecure", false, "skip SSH known_hosts verification for sftp://")
 	f.BoolVar(&outOfSync, "out-of-sync", false, "remove all 'N SYNC references from the UI")
-	f.BoolVarP(&webEnable, "web", "w", false, "serve a read-only progress page on the LAN and show a QR code")
+	f.BoolVar(&webEnable, "web", true, "serve a read-only progress page on the LAN and show a QR code (--web=false to disable)")
 	f.StringVar(&webAddr, "web-addr", ":8765", "address for the progress page (with --web)")
 
 	return cmd
@@ -168,21 +168,24 @@ func run(appCfg *config.AppConfig, sourceURI, destURI string, webEnable bool, we
 	model := ui.InitialModel(appCfg, source, dest)
 
 	if webEnable {
+		// The progress page is a convenience, not the job: if the port is busy
+		// or the listener fails, warn and sync anyway.
 		srv, err := web.New(webAddr)
+		if err == nil {
+			_, err = srv.Start()
+		}
 		if err != nil {
-			return fmt.Errorf("starting progress page: %w", err)
-		}
-		if _, err := srv.Start(); err != nil {
-			return fmt.Errorf("starting progress page: %w", err)
-		}
-		defer func() { _ = srv.Close() }()
-		tunnel := &web.Tunnel{}
-		defer tunnel.Stop()
+			fmt.Fprintf(os.Stderr, "Warning: progress page disabled: %v\n", err)
+		} else {
+			defer func() { _ = srv.Close() }()
+			tunnel := &web.Tunnel{}
+			defer tunnel.Stop()
 
-		model.Web = srv
-		model.Tunnel = tunnel
-		model.Installer = &web.Installer{}
-		model.ShowQR = true
+			model.Web = srv
+			model.Tunnel = tunnel
+			model.Installer = &web.Installer{}
+			model.ShowQR = true
+		}
 	}
 
 	p := tea.NewProgram(
