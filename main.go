@@ -181,6 +181,7 @@ func run(appCfg *config.AppConfig, sourceURI, destURI string, webEnable bool, we
 
 		model.Web = srv
 		model.Tunnel = tunnel
+		model.Installer = &web.Installer{}
 		model.ShowQR = true
 	}
 

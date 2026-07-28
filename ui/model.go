@@ -141,8 +141,12 @@ type Model struct {
 	// Optional read-only web UI and its Cloudflare quick tunnel.
 	Web        *web.Server
 	Tunnel     *web.Tunnel
+	Installer  *web.Installer
 	ShowQR     bool
 	TunnelNote string
+	// OfferInstall is set when the user pressed [w] but cloudflared is missing,
+	// prompting for consent before we download anything.
+	OfferInstall bool
 
 	// RecentFiles is the global history ring across all workers, newest last.
 	RecentFiles []FileRecord

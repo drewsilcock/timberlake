@@ -40,11 +40,20 @@ const (
 	TunnelFailed
 )
 
-// TunnelAvailable reports whether the cloudflared binary can be found.
-func TunnelAvailable() bool {
-	_, err := exec.LookPath("cloudflared")
-	return err == nil
+// cloudflaredPath returns the cloudflared to use: the checksum-verified copy we
+// installed ourselves if present, otherwise whatever is on $PATH.
+func cloudflaredPath() string {
+	if ManagedInstalled() {
+		return ManagedPath()
+	}
+	if p, err := exec.LookPath("cloudflared"); err == nil {
+		return p
+	}
+	return ""
 }
+
+// TunnelAvailable reports whether a cloudflared binary can be found.
+func TunnelAvailable() bool { return cloudflaredPath() != "" }
 
 // State returns the current state, public URL and last error.
 func (t *Tunnel) State() (TunnelState, string, error) {
@@ -62,8 +71,9 @@ func (t *Tunnel) Start(port, tokenPath string, onUpdate func()) error {
 		t.mu.Unlock()
 		return nil
 	}
-	if !TunnelAvailable() {
-		t.state, t.err = TunnelFailed, fmt.Errorf("cloudflared not found in PATH")
+	bin := cloudflaredPath()
+	if bin == "" {
+		t.state, t.err = TunnelFailed, fmt.Errorf("cloudflared not found")
 		t.mu.Unlock()
 		return t.err
 	}
@@ -71,7 +81,7 @@ func (t *Tunnel) Start(port, tokenPath string, onUpdate func()) error {
 	t.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, "cloudflared", "tunnel", "--no-autoupdate",
+	cmd := exec.CommandContext(ctx, bin, "tunnel", "--no-autoupdate",
 		"--url", "http://127.0.0.1:"+port)
 
 	stderr, err := cmd.StderrPipe()

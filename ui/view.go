@@ -353,6 +353,29 @@ func renderQRPanel(m Model) string {
 	if m.TunnelNote != "" {
 		lines = append(lines, lbl.Render(m.TunnelNote))
 	}
+	if m.Installer != nil {
+		switch state, done, total, err := m.Installer.State(); state {
+		case web.InstallDownloading:
+			pctText := ""
+			if total > 0 {
+				pctText = fmt.Sprintf("  %.0f%%", float64(done)/float64(total)*100)
+			}
+			lines = append(lines, statusPausedStyle.Render(fmt.Sprintf(
+				"Downloading cloudflared %s… %s%s",
+				web.CloudflaredVersion, formatBytes(done), pctText)))
+		case web.InstallVerifying:
+			lines = append(lines, statusPausedStyle.Render("Verifying checksum…"))
+		case web.InstallDone:
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("#32CD32")).
+				Render("cloudflared installed (checksum verified)."))
+		case web.InstallFailed:
+			msg := "install failed"
+			if err != nil {
+				msg = err.Error()
+			}
+			lines = append(lines, statusErrorStyle.Render(msg))
+		}
+	}
 	lines = append(lines, "", strings.TrimRight(qr.String(), "\n"))
 
 	return lipgloss.NewStyle().

@@ -74,3 +74,22 @@ tasks:
       - task: vet
       - task: lint
       - task: test
+
+  update-cloudflared:
+    desc: Re-pin the cloudflared version and checksums used by assisted install
+    vars:
+      VERSION: '{{.VERSION | default "latest"}}'
+    cmds:
+      - |
+        set -e
+        V="{{.VERSION}}"
+        if [ "$V" = "latest" ]; then
+          V=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+        fi
+        echo "cloudflared $V — put these into web/install.go:"
+        echo ""
+        for A in cloudflared-darwin-arm64.tgz cloudflared-darwin-amd64.tgz \
+                 cloudflared-linux-amd64 cloudflared-linux-arm64 cloudflared-windows-amd64.exe; do
+          SUM=$(curl -sL "https://github.com/cloudflare/cloudflared/releases/download/$V/$A" | shasum -a 256 | awk '{print $1}')
+          printf '  %-34s %s\n' "$A" "$SUM"
+        done

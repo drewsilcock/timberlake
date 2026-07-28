@@ -15,6 +15,19 @@ import (
 // How long each 'N SYNC trivia fact stays on screen before rotating.
 const triviaDisplayDuration = 45 * time.Second
 
+// startTunnel launches the quick tunnel and publishes its URL when ready.
+func (m Model) startTunnel() {
+	if m.Web == nil || m.Tunnel == nil {
+		return
+	}
+	srv, tun := m.Web, m.Tunnel
+	_ = tun.Start(srv.Port(), srv.TokenPath(), func() {
+		if s, u, _ := tun.State(); s == web.TunnelOn {
+			srv.SetRemoteURL(u)
+		}
+	})
+}
+
 // phaseName is the human label published to the web UI.
 func (m Model) phaseName() string {
 	switch m.State {
@@ -196,19 +209,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Web.SetRemoteURL("")
 					m.TunnelNote = "Public link stopped — LAN only."
 				default:
+					m.ShowQR = true
 					if !web.TunnelAvailable() {
-						m.TunnelNote = "cloudflared not found in PATH — install it to share a public link."
+						// Ask before downloading anything.
+						m.OfferInstall = true
+						if web.InstallSupported() {
+							m.TunnelNote = fmt.Sprintf(
+								"cloudflared not found. Press [d] to download it (~%d MB, checksum-verified) or install it yourself.",
+								web.InstallSizeMB())
+						} else {
+							m.TunnelNote = "cloudflared not found, and no verified build is pinned for this platform — please install it yourself."
+						}
 						break
 					}
-					m.ShowQR = true
+					m.OfferInstall = false
 					m.TunnelNote = "Starting public link…"
-					srv, tun := m.Web, m.Tunnel
-					_ = tun.Start(srv.Port(), srv.TokenPath(), func() {
-						if s, u, _ := tun.State(); s == web.TunnelOn {
-							srv.SetRemoteURL(u)
-						}
-					})
+					m.startTunnel()
 				}
+			}
+
+		case "d":
+			// Consent to the assisted cloudflared install.
+			if m.OfferInstall && m.Installer != nil && web.InstallSupported() {
+				m.OfferInstall = false
+				m.TunnelNote = "Downloading cloudflared…"
+				inst := m.Installer
+				inst.Install(func() {
+					if s, _, _, _ := inst.State(); s == web.InstallDone {
+						m.startTunnel()
+					}
+				})
 			}
 		}
 

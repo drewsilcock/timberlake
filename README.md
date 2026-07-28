@@ -139,6 +139,14 @@ run, Cloudflare offers no uptime guarantee, and the link (though read-only)
 exposes file names and endpoints to anyone who has it. WebSockets are used
 rather than SSE because quick tunnels buffer `text/event-stream` responses.
 
+The tunnel needs the `cloudflared` binary. If it isn't on your `PATH`, pressing
+`w` offers an assisted install: press `d` and Timberlake downloads a **pinned**
+release, verifies it against a **hardcoded SHA-256**, and keeps it in your cache
+directory (never on `PATH`). Nothing is downloaded without that explicit
+keypress, and nothing unverified is ever executed. Cloudflare does not publish
+checksums with their releases, so the pinned hashes live in `web/install.go`;
+`task update-cloudflared` recomputes them when bumping the version.
+
 ## Development
 
 ```sh
