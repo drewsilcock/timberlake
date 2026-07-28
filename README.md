@@ -35,7 +35,11 @@ experimental.
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`
   (or `$S3CMD_CONFIG`) when present.
 - **Live TUI** — per-worker bars (committed / in-flight / read-ahead), totals,
-  rolling speed, and a running summary, with pause/resume support.
+  rolling speed, and a running summary, with pause/resume support. Navigate
+  workers with `j`/`k` and press Space to zoom into one.
+- **Watch from your phone** — `--web` serves a read-only progress page over
+  WebSockets and shows a QR code in the TUI. LAN-only by default; press `w` to
+  open a public Cloudflare quick tunnel (needs `cloudflared` on PATH).
 
 ## Installation
 
@@ -115,9 +119,25 @@ While a sync is running:
 
 | Key | Action |
 | --- | --- |
-| `p` / `Space` | Pause / resume |
-| `↑` / `↓` (or `k` / `j`) | Scroll the worker list |
+| `p` | Pause / resume |
+| `↑` / `↓` (or `k` / `j`) | Move through the worker list |
+| `Space` / `Enter` | Zoom the selected worker (Esc to go back) |
+| `r` | Show/hide the QR share panel (with `--web`) |
+| `w` | Start/stop the public Cloudflare quick tunnel (with `--web`) |
 | `q` / `Ctrl+C` | Quit |
+
+### Web progress page
+
+`--web` (default address `:8765`) serves a self-contained, read-only page that
+streams live progress over a WebSocket, plus a QR code in the TUI to open it on
+your phone. The page lives under an unguessable token path, and every other path
+returns 404.
+
+By default it is reachable only from your LAN. Pressing `w` starts a Cloudflare
+quick tunnel for a public link — no account needed, but the URL changes every
+run, Cloudflare offers no uptime guarantee, and the link (though read-only)
+exposes file names and endpoints to anyone who has it. WebSockets are used
+rather than SSE because quick tunnels buffer `text/event-stream` responses.
 
 ## Development
 

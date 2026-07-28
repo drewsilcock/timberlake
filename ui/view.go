@@ -6,7 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"timberlake/web"
+
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mdp/qrterminal/v3"
 )
 
 var (
@@ -285,6 +288,10 @@ func (m Model) View() string {
 		b.WriteString(workersBoxStyle.Render(m.Viewport.View()))
 		b.WriteString("\n")
 		b.WriteString(renderHistoryPanel(m))
+		if m.ShowQR {
+			b.WriteString("\n")
+			b.WriteString(renderQRPanel(m))
+		}
 	}
 
 	// Footer Help Text
@@ -294,6 +301,65 @@ func (m Model) View() string {
 		"Controls: [p] Pause/Resume  [↑/↓/k/j] Select worker  [Space] Zoom  [q] Quit")))
 
 	return b.String()
+}
+
+// renderQRPanel shows the share URL plus a scannable QR code, and the state of
+// the optional public tunnel.
+func renderQRPanel(m Model) string {
+	if m.Web == nil {
+		return ""
+	}
+	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
+	val := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA"))
+	head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF69B4"))
+
+	share := m.Web.ShareURL()
+
+	var qr strings.Builder
+	qrterminal.GenerateWithConfig(share, qrterminal.Config{
+		Level:          qrterminal.L,
+		Writer:         &qr,
+		HalfBlocks:     true,
+		BlackChar:      qrterminal.BLACK_BLACK,
+		WhiteChar:      qrterminal.WHITE_WHITE,
+		WhiteBlackChar: qrterminal.WHITE_BLACK,
+		BlackWhiteChar: qrterminal.BLACK_WHITE,
+		QuietZone:      1,
+	})
+
+	tunnelLine := lbl.Render("Public link:") + " " + lbl.Render("off — press [w] to share beyond this network")
+	if m.Tunnel != nil {
+		switch state, u, err := m.Tunnel.State(); state {
+		case web.TunnelStarting:
+			tunnelLine = lbl.Render("Public link:") + " " + statusPausedStyle.Render("starting…")
+		case web.TunnelOn:
+			tunnelLine = lbl.Render("Public link:") + " " + lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color("#32CD32")).Render(u)
+		case web.TunnelFailed:
+			msg := "failed"
+			if err != nil {
+				msg = err.Error()
+			}
+			tunnelLine = lbl.Render("Public link:") + " " + statusErrorStyle.Render(msg)
+		}
+	}
+
+	lines := []string{
+		head.Render("📱 SCAN TO WATCH PROGRESS"),
+		"",
+		lbl.Render("On this network:") + " " + val.Render(m.Web.LanURL()),
+		tunnelLine,
+	}
+	if m.TunnelNote != "" {
+		lines = append(lines, lbl.Render(m.TunnelNote))
+	}
+	lines = append(lines, "", strings.TrimRight(qr.String(), "\n"))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF69B4")).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
 }
 
 // renderWorkerDetail is the full-screen view for a single worker: what it is

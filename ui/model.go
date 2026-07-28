@@ -6,6 +6,7 @@ import (
 
 	"timberlake/config"
 	"timberlake/transfer"
+	"timberlake/web"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -136,6 +137,12 @@ type Model struct {
 	// worker is zoomed to a full-screen detail view.
 	SelectedWorker int
 	ZoomWorker     bool
+
+	// Optional read-only web UI and its Cloudflare quick tunnel.
+	Web        *web.Server
+	Tunnel     *web.Tunnel
+	ShowQR     bool
+	TunnelNote string
 
 	// RecentFiles is the global history ring across all workers, newest last.
 	RecentFiles []FileRecord

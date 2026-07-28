@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"timberlake/transfer"
+	"timberlake/web"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -13,6 +14,81 @@ import (
 
 // How long each 'N SYNC trivia fact stays on screen before rotating.
 const triviaDisplayDuration = 45 * time.Second
+
+// phaseName is the human label published to the web UI.
+func (m Model) phaseName() string {
+	switch m.State {
+	case StateScanning:
+		return "scanning"
+	case StateCatchingUp:
+		return "catching-up"
+	case StateUploading:
+		return "uploading"
+	case StatePaused:
+		return "paused"
+	case StateDone:
+		return "done"
+	case StateCancelled:
+		return "cancelled"
+	case StateError:
+		return "error"
+	default:
+		return "working"
+	}
+}
+
+// publishWeb pushes the current state to the web UI, if one is running.
+func (m Model) publishWeb() {
+	if m.Web == nil {
+		return
+	}
+	workers := make([]web.WorkerSnapshot, len(m.Workers))
+	for i, w := range m.Workers {
+		workers[i] = web.WorkerSnapshot{
+			ID: w.ID, Status: w.Status, File: w.FileName,
+			Committed: w.CommittedSize, Uploaded: w.UploadedSize,
+			Buffered: w.BufferedSize, Total: w.TotalSize,
+		}
+	}
+
+	const recentN = 12
+	hist := m.RecentFiles
+	if len(hist) > recentN {
+		hist = hist[len(hist)-recentN:]
+	}
+	recent := make([]web.HistorySnapshot, len(hist))
+	for i, r := range hist {
+		recent[i] = web.HistorySnapshot{
+			Name: r.Name, Size: r.Size, Status: r.Status,
+			Seconds: int(r.Duration.Seconds()),
+		}
+	}
+
+	transferred := m.liveTransferredBytes() + m.SkippedBytes
+	eta := 0
+	if m.SpeedBps > 0 && m.TotalBytes > transferred {
+		eta = int(float64(m.TotalBytes-transferred) / m.SpeedBps)
+	}
+
+	m.Web.Publish(web.Snapshot{
+		Phase:       m.phaseName(),
+		Source:      m.sourceLabel(),
+		Destination: m.destLabel(),
+		TotalFiles:  m.TotalFiles,
+		Uploaded:    m.UploadedFiles,
+		Skipped:     m.SkippedFiles,
+		Failed:      m.FailedFiles,
+		TotalBytes:  m.TotalBytes,
+		SentBytes:   m.liveTransferredBytes(),
+		SkipBytes:   m.SkippedBytes,
+		SpeedBps:    m.SpeedBps,
+		ElapsedSec:  int(time.Since(m.StartTime).Seconds()),
+		ETASec:      eta,
+		Workers:     workers,
+		Recent:      recent,
+		Boring:      m.Config != nil && m.Config.OutOfSync,
+	})
+}
 
 // recordHistory appends a finished item to the worker's history and the global
 // ring, both capped at maxHistory entries.
@@ -103,6 +179,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "end", "G":
 			m.SelectedWorker = len(m.Workers) - 1
+
+		case "r":
+			// Toggle the QR / share panel.
+			if m.Web != nil {
+				m.ShowQR = !m.ShowQR
+			}
+
+		case "w":
+			// Toggle the Cloudflare quick tunnel (public, read-only link).
+			if m.Web != nil && m.Tunnel != nil {
+				state, _, _ := m.Tunnel.State()
+				switch state {
+				case web.TunnelOn, web.TunnelStarting:
+					m.Tunnel.Stop()
+					m.Web.SetRemoteURL("")
+					m.TunnelNote = "Public link stopped — LAN only."
+				default:
+					if !web.TunnelAvailable() {
+						m.TunnelNote = "cloudflared not found in PATH — install it to share a public link."
+						break
+					}
+					m.ShowQR = true
+					m.TunnelNote = "Starting public link…"
+					srv, tun := m.Web, m.Tunnel
+					_ = tun.Start(srv.Port(), srv.TokenPath(), func() {
+						if s, u, _ := tun.State(); s == web.TunnelOn {
+							srv.SetRemoteURL(u)
+						}
+					})
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -139,6 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.sampleSpeed()
+		m.publishWeb()
 
 	case ScanCompleteMsg:
 		if msg.Err != nil {

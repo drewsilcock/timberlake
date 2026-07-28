@@ -11,6 +11,7 @@ import (
 	"timberlake/backends"
 	"timberlake/config"
 	"timberlake/ui"
+	"timberlake/web"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -41,6 +42,8 @@ func newRootCmd() *cobra.Command {
 		sftpKey      string
 		sftpInsecure bool
 		outOfSync    bool
+		webEnable    bool
+		webAddr      string
 	)
 
 	// Detect --out-of-sync early so the help text can drop the flavour too.
@@ -121,7 +124,7 @@ SOURCE and DEST may each be:
 				appCfg.EndpointURL = os.Getenv("AWS_ENDPOINT_URL")
 			}
 
-			return run(appCfg, sourceURI, destURI)
+			return run(appCfg, sourceURI, destURI, webEnable, webAddr)
 		},
 	}
 
@@ -140,13 +143,15 @@ SOURCE and DEST may each be:
 	f.StringVar(&sftpKey, "sftp-key", "", "path to a private key for sftp:// endpoints")
 	f.BoolVar(&sftpInsecure, "sftp-insecure", false, "skip SSH known_hosts verification for sftp://")
 	f.BoolVar(&outOfSync, "out-of-sync", false, "remove all 'N SYNC references from the UI")
+	f.BoolVarP(&webEnable, "web", "w", false, "serve a read-only progress page on the LAN and show a QR code")
+	f.StringVar(&webAddr, "web-addr", ":8765", "address for the progress page (with --web)")
 
 	return cmd
 }
 
 // run builds the backends and drives the TUI, returning a non-nil error only for
 // setup failures or a failed verification (so scripts get a non-zero exit).
-func run(appCfg *config.AppConfig, sourceURI, destURI string) error {
+func run(appCfg *config.AppConfig, sourceURI, destURI string, webEnable bool, webAddr string) error {
 	ctx := context.Background()
 	source, err := backends.NewSource(ctx, sourceURI, appCfg)
 	if err != nil {
@@ -160,8 +165,27 @@ func run(appCfg *config.AppConfig, sourceURI, destURI string) error {
 	}
 	defer func() { _ = dest.Close() }()
 
+	model := ui.InitialModel(appCfg, source, dest)
+
+	if webEnable {
+		srv, err := web.New(webAddr)
+		if err != nil {
+			return fmt.Errorf("starting progress page: %w", err)
+		}
+		if _, err := srv.Start(); err != nil {
+			return fmt.Errorf("starting progress page: %w", err)
+		}
+		defer func() { _ = srv.Close() }()
+		tunnel := &web.Tunnel{}
+		defer tunnel.Stop()
+
+		model.Web = srv
+		model.Tunnel = tunnel
+		model.ShowQR = true
+	}
+
 	p := tea.NewProgram(
-		ui.InitialModel(appCfg, source, dest),
+		model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
