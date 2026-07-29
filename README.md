@@ -117,8 +117,6 @@ sources taking precedence:
 
 While a sync is running:
 
-| Key | Action |
-| --- | --- |
 The dashboard shows a panel chooser on the left and one active panel on the
 right: **Progress**, **Transfers**, **History**, **Queue** and **Web UI**.
 
