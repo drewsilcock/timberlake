@@ -128,6 +128,8 @@ func poolModel(t *testing.T, cfg *config.AppConfig, src transfer.Source, dst tra
 		Workers:    workers,
 		TotalFiles: int64(len(items)),
 		State:      StateCatchingUp,
+		pause:      newPauseGate(),
+		layout:     &layoutBounds{},
 		StartTime:  time.Now(),
 	}
 }

@@ -119,12 +119,34 @@ While a sync is running:
 
 | Key | Action |
 | --- | --- |
-| `p` | Pause / resume |
+The dashboard shows a panel chooser on the left and one active panel on the
+right: **Progress**, **Transfers**, **History**, **Queue** and **Web UI**.
+
+| Key | Action |
+| --- | --- |
+| `Tab` / `Shift+Tab`, or `1`–`5` | Switch panel (clicking the sidebar works too) |
 | `↑` / `↓` (or `k` / `j`) | Move through the worker list |
-| `Space` / `Enter` | Zoom the selected worker (Esc to go back) |
-| `r` | Show/hide the QR share panel (with `--web`) |
-| `w` | Start/stop the public Cloudflare quick tunnel (with `--web`) |
+| `Space` / `Enter` | Show detail for the selected worker (Esc to go back) |
+| `p` | Pause / resume — genuinely stops the workers at the next file boundary |
+| `w` | Start/stop the public Cloudflare quick tunnel |
 | `q` / `Ctrl+C` | Quit |
+
+### Working on the interface
+
+`--demo` runs the real pipeline against synthetic backends: no network, but a
+full, interactive dashboard including the catch-up phase, slow transfers and
+occasional failures.
+
+```sh
+timberlake --demo                      # ~4000 fake files
+timberlake --demo=files=300,mbps=8     # smaller and faster
+```
+
+To inspect the rendered layout without a terminal:
+
+```sh
+TL_UI_DUMP=1 TL_UI_COLS=160 TL_UI_ROWS=50 go test ./ui -run TestDumpUI -v
+```
 
 ### Web progress page
 

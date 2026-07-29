@@ -33,6 +33,8 @@ func newTestModel(jobs int, totalFiles, totalBytes int64) Model {
 		TotalFiles:    totalFiles,
 		TotalBytes:    totalBytes,
 		StartTime:     time.Now(),
+		pause:         newPauseGate(),
+		layout:        &layoutBounds{},
 		Ctx:           ctx,
 		Cancel:        cancel,
 	}

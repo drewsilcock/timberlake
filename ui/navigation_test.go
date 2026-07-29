@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"timberlake/transfer"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -108,6 +110,7 @@ func TestHistoryRecordedPerWorkerAndGlobally(t *testing.T) {
 func TestZoomedViewRendersInlineNotFullscreen(t *testing.T) {
 	m := newTestModel(3, 10, 1000)
 	m.Width, m.Height = 120, 44
+	m.ActivePane = PaneTransfers
 	m = step(m, WorkerStatusMsg{WorkerID: 1, Status: "Uploading", FileName: "deep/path/target.tif", Size: 500})
 	m = step(m, key("j")) // select worker #2 (index 1)
 	m = step(m, key(" "))
@@ -120,7 +123,7 @@ func TestZoomedViewRendersInlineNotFullscreen(t *testing.T) {
 		t.Error("zoom should show the selected worker's current file")
 	}
 	// The rest of the dashboard must remain visible — zoom is inline now.
-	for _, want := range []string{"TIMBERLAKE", "Status:", "RECENT FILES"} {
+	for _, want := range []string{"TIMBERLAKE", "PANELS"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("zoomed view lost %q; it should render inside the workers panel", want)
 		}
@@ -139,6 +142,7 @@ func TestViewFitsTerminalHeight(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			m = step(m, WorkerStatusMsg{WorkerID: 0, Status: "Done", FileName: "done.bin", Size: 10})
 		}
+		m.ActivePane = PaneTransfers
 		got := lipgloss.Height(m.View())
 		if got > h {
 			t.Errorf("terminal height %d: view rendered %d lines (overflows)", h, got)
@@ -146,23 +150,45 @@ func TestViewFitsTerminalHeight(t *testing.T) {
 	}
 }
 
-func TestTabFocusesRecentPane(t *testing.T) {
+func TestTabCyclesPanes(t *testing.T) {
 	m := newTestModel(3, 10, 1000)
 	m.Width, m.Height = 120, 44
-	if m.FocusedPane != PaneWorkers {
-		t.Fatalf("default focus = %v, want PaneWorkers", m.FocusedPane)
+	if m.ActivePane != PaneProgress {
+		t.Fatalf("default pane = %v, want PaneProgress", m.ActivePane)
 	}
 
-	m = step(m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.FocusedPane != PaneRecent {
-		t.Errorf("after tab, focus = %v, want PaneRecent", m.FocusedPane)
-	}
-	if strings.Contains(m.View(), "[Tab] to expand") {
-		t.Error("focused recent pane should not still advertise [Tab] to expand")
+	for i, want := range []Pane{PaneTransfers, PaneHistory, PaneQueue, PaneWeb, PaneProgress} {
+		m = step(m, tea.KeyMsg{Type: tea.KeyTab})
+		if m.ActivePane != want {
+			t.Fatalf("tab %d: pane = %v, want %v", i+1, m.ActivePane, want)
+		}
 	}
 
-	m = step(m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.FocusedPane != PaneWorkers {
-		t.Errorf("tab again should return focus to workers, got %v", m.FocusedPane)
+	// Number keys jump straight to a pane.
+	m = step(m, key("3"))
+	if m.ActivePane != PaneHistory {
+		t.Errorf("key 3: pane = %v, want PaneHistory", m.ActivePane)
+	}
+}
+
+func TestEachPaneRenders(t *testing.T) {
+	m := newTestModel(4, 100, 1<<30)
+	m.Width, m.Height = 130, 40
+	m.WorkQueue = []transfer.Item{{RelativePath: "a/one.tif", Size: 100}, {RelativePath: "a/two.tif", Size: 200}}
+	m = step(m, WorkerStatusMsg{WorkerID: 0, Status: "Uploading", FileName: "a/one.tif", Size: 100})
+	m = step(m, WorkerStatusMsg{WorkerID: 1, Status: "Done", FileName: "a/done.tif", Size: 50})
+
+	for _, p := range allPanes {
+		m.ActivePane = p
+		out := m.View()
+		if !strings.Contains(out, "TIMBERLAKE") {
+			t.Errorf("pane %s: header missing", p.Title())
+		}
+		if !strings.Contains(out, "PANELS") {
+			t.Errorf("pane %s: sidebar missing", p.Title())
+		}
+		if h := lipgloss.Height(out); h > m.Height {
+			t.Errorf("pane %s: rendered %d lines, terminal is %d", p.Title(), h, m.Height)
+		}
 	}
 }

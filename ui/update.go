@@ -216,11 +216,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case StateUploading, StateCatchingUp:
 				m.PausedFrom = m.State
 				m.State = StatePaused
+				m.pause.set(true) // actually stop the workers
 			case StatePaused:
 				m.State = m.PausedFrom
 				if m.State == StatePaused { // defensive: never stay paused
 					m.State = StateUploading
 				}
+				m.pause.set(false)
 			}
 
 		case " ", "enter":
@@ -233,17 +235,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ZoomWorker = false
 
 		case "tab":
-			if m.FocusedPane == PaneWorkers {
-				m.FocusedPane = PaneRecent
-			} else {
-				m.FocusedPane = PaneWorkers
-			}
+			m.ActivePane = Pane((int(m.ActivePane) + 1) % len(allPanes))
 
 		case "shift+tab":
-			if m.FocusedPane == PaneRecent {
-				m.FocusedPane = PaneWorkers
-			} else {
-				m.FocusedPane = PaneRecent
+			m.ActivePane = Pane((int(m.ActivePane) - 1 + len(allPanes)) % len(allPanes))
+
+		case "1", "2", "3", "4", "5":
+			if n := int(msg.String()[0] - '1'); n >= 0 && n < len(allPanes) {
+				m.ActivePane = allPanes[n]
 			}
 
 		case "up", "k":
@@ -314,13 +313,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		// Clicking a panel focuses it (and clicking a worker row selects it).
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && m.layout != nil {
-			switch {
-			case msg.Y >= m.layout.recentTop && msg.Y < m.layout.recentBottom:
-				m.FocusedPane = PaneRecent
-			case msg.Y >= m.layout.workersTop && msg.Y < m.layout.workersBottom:
-				m.FocusedPane = PaneWorkers
-				// Rows start after the panel header and top border.
-				if row := msg.Y - m.layout.workersTop - 2 + m.Viewport.YOffset; row >= 0 && row < len(m.Workers) {
+			// Clicking a sidebar entry switches panel.
+			if msg.X < m.layout.sidebarWidth {
+				if row := msg.Y - m.layout.sidebarTop; row >= 0 && row < len(allPanes) {
+					m.ActivePane = allPanes[row]
+				}
+			} else if m.ActivePane == PaneTransfers && !m.ZoomWorker {
+				if row := msg.Y - m.layout.sidebarTop + m.Viewport.YOffset; row >= 0 && row < len(m.Workers) {
 					m.SelectedWorker = row
 				}
 			}
@@ -416,6 +415,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w.Status = msg.Status
 			w.FileName = msg.FileName
 			w.LastError = msg.Err
+			if msg.QueueIndex > m.QueuePos {
+				m.QueuePos = msg.QueueIndex
+			}
 
 			switch msg.Status {
 			case "Uploading":
@@ -572,12 +574,20 @@ func (m *Model) sampleSpeed() {
 	}
 }
 
+// queued pairs an item with its position in the scan order, so the UI can show
+// what is coming up next.
+type queued struct {
+	item  transfer.Item
+	index int
+}
+
 func startWorkerPool(m *Model) {
-	fileChan := make(chan transfer.Item, len(m.WorkQueue))
-	for _, f := range m.WorkQueue {
-		fileChan <- f
+	fileChan := make(chan queued, len(m.WorkQueue))
+	for i, f := range m.WorkQueue {
+		fileChan <- queued{item: f, index: i}
 	}
 	close(fileChan)
+	gate := m.pause
 
 	source := m.Source
 	dest := m.Dest
@@ -597,13 +607,18 @@ func startWorkerPool(m *Model) {
 	for i := 0; i < m.Config.Jobs; i++ {
 		workerID := i
 		go func() {
-			for item := range fileChan {
+			for q := range fileChan {
+				item := q.item
 				if ctx.Err() != nil {
+					return
+				}
+				// Block here while the sync is paused.
+				if !gate.wait(ctx) {
 					return
 				}
 
 				// Step 1: skip if the destination already has it at full size.
-				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Checking", FileName: item.RelativePath, Size: item.Size}
+				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Checking", FileName: item.RelativePath, Size: item.Size, QueueIndex: q.index}
 
 				exists, size, err := dest.Stat(ctx, item)
 				if err == nil && exists && size == item.Size {

@@ -42,17 +42,9 @@ type FileError struct {
 // layoutBounds is the last-rendered vertical extent of the focusable panels,
 // used to route mouse clicks to the right pane.
 type layoutBounds struct {
-	workersTop, workersBottom int
-	recentTop, recentBottom   int
+	sidebarTop   int
+	sidebarWidth int
 }
-
-// Pane identifies a focusable panel in the dashboard.
-type Pane int
-
-const (
-	PaneWorkers Pane = iota
-	PaneRecent
-)
 
 // FileRecord is one finished item, kept for the history panels.
 type FileRecord struct {
@@ -177,9 +169,16 @@ type Model struct {
 	// RecentFiles is the global history ring across all workers, newest last.
 	RecentFiles []FileRecord
 
-	// FocusedPane is which panel Tab has focus on; the focused pane is given
-	// more room and a highlighted border.
-	FocusedPane Pane
+	// ActivePane is the panel currently displayed in the main area.
+	ActivePane Pane
+
+	// pause actually stops the worker pool (see pauseGate). Pointer so the
+	// value-copied Model shares one gate with the running workers.
+	pause *pauseGate
+
+	// QueuePos is the highest index dispatched from WorkQueue, so the Queue
+	// panel can show what is coming up next.
+	QueuePos int
 
 	// layout records where panels were drawn so mouse clicks can be hit-tested.
 	// It is a pointer so the value-copied Model shares one instance between
@@ -270,11 +269,12 @@ type WorkerProgressMsg struct {
 }
 
 type WorkerStatusMsg struct {
-	WorkerID int
-	Status   string // "Checking", "Uploading", "Done", "Skipped", "Error"
-	FileName string
-	Err      string
-	Size     int64
+	WorkerID   int
+	Status     string // "Checking", "Queued", "Uploading", "Done", "Skipped", "Error"
+	FileName   string
+	Err        string
+	Size       int64
+	QueueIndex int // position in the scan order, for the Queue panel
 }
 
 type VerificationCompleteMsg struct {
@@ -332,6 +332,7 @@ func InitialModel(appCfg *config.AppConfig, source transfer.Source, dest transfe
 		TriviaIndex:      0,
 		LastTriviaUpdate: time.Now(),
 		layout:           &layoutBounds{},
+		pause:            newPauseGate(),
 		Ctx:              ctx,
 		Cancel:           cancel,
 		StartTime:        time.Now(),

@@ -10,6 +10,8 @@ import (
 
 	"timberlake/backends"
 	"timberlake/config"
+	"timberlake/transfer"
+	"timberlake/transfer/demo"
 	"timberlake/ui"
 	"timberlake/web"
 
@@ -44,6 +46,7 @@ func newRootCmd() *cobra.Command {
 		outOfSync    bool
 		webEnable    bool
 		webAddr      string
+		demoSpec     string
 	)
 
 	// Detect --out-of-sync early so the help text can drop the flavour too.
@@ -82,11 +85,19 @@ SOURCE and DEST may each be:
 		Example: `  timberlake /data/scan s3://my-bucket/scans/site-001 24
   timberlake /data/scan sftp://user@host/backup/scan
   timberlake s3://my-bucket/scans/site-001 /restore/site-001`,
-		Args:          cobra.RangeArgs(2, 3),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("demo") {
+				return nil
+			}
+			return cobra.RangeArgs(2, 3)(cmd, args)
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(_ *cobra.Command, args []string) error {
-			sourceURI, destURI := args[0], args[1]
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sourceURI, destURI := "demo://source", "demo://destination"
+			if len(args) >= 2 {
+				sourceURI, destURI = args[0], args[1]
+			}
 			if len(args) == 3 {
 				if j, err := strconv.Atoi(args[2]); err == nil && j > 0 {
 					jobs = j
@@ -124,7 +135,7 @@ SOURCE and DEST may each be:
 				appCfg.EndpointURL = os.Getenv("AWS_ENDPOINT_URL")
 			}
 
-			return run(appCfg, sourceURI, destURI, webEnable, webAddr)
+			return run(appCfg, sourceURI, destURI, webEnable, webAddr, cmd.Flags().Changed("demo"), demoSpec)
 		},
 	}
 
@@ -145,24 +156,36 @@ SOURCE and DEST may each be:
 	f.BoolVar(&outOfSync, "out-of-sync", false, "remove all 'N SYNC references from the UI")
 	f.BoolVar(&webEnable, "web", true, "serve a read-only progress page on the LAN and show a QR code (--web=false to disable)")
 	f.StringVar(&webAddr, "web-addr", ":8765", "address for the progress page (with --web)")
+	f.StringVar(&demoSpec, "demo", "", "run against synthetic data for UI work, e.g. --demo=files=500,mbps=8 (no network)")
 
 	return cmd
 }
 
 // run builds the backends and drives the TUI, returning a non-nil error only for
 // setup failures or a failed verification (so scripts get a non-zero exit).
-func run(appCfg *config.AppConfig, sourceURI, destURI string, webEnable bool, webAddr string) error {
+func run(appCfg *config.AppConfig, sourceURI, destURI string, webEnable bool, webAddr string, demoMode bool, demoSpec string) error {
 	ctx := context.Background()
-	source, err := backends.NewSource(ctx, sourceURI, appCfg)
-	if err != nil {
-		return fmt.Errorf("opening source %q: %w", sourceURI, err)
+
+	var source transfer.Source
+	var dest transfer.Destination
+	var err error
+
+	if demoMode {
+		// Synthetic backends: the real pipeline, fake data, no network.
+		cfg := demo.ParseSpec(demoSpec)
+		src, dst := demo.Pair(cfg)
+		source, dest = src, dst
+	} else {
+		source, err = backends.NewSource(ctx, sourceURI, appCfg)
+		if err != nil {
+			return fmt.Errorf("opening source %q: %w", sourceURI, err)
+		}
+		dest, err = backends.NewDestination(ctx, destURI, appCfg)
+		if err != nil {
+			return fmt.Errorf("opening destination %q: %w", destURI, err)
+		}
 	}
 	defer func() { _ = source.Close() }()
-
-	dest, err := backends.NewDestination(ctx, destURI, appCfg)
-	if err != nil {
-		return fmt.Errorf("opening destination %q: %w", destURI, err)
-	}
 	defer func() { _ = dest.Close() }()
 
 	model := ui.InitialModel(appCfg, source, dest)
