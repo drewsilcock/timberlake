@@ -398,6 +398,23 @@ func renderCatchUpPanel(m Model) string {
 		etaText = "measuring…"
 	}
 
+	if m.BulkListing {
+		// Bulk listing replaces per-file checks entirely; show that instead of a
+		// files-checked bar that would sit at zero.
+		body := fmt.Sprintf(
+			"%s %s\n%s\n\n  %s %s\n  %s %s",
+			m.Spinner.View(), header,
+			lbl.Render("Listing the destination in one pass instead of checking each file separately."),
+			lbl.Render("Objects found:"), val.Render(formatNumber(m.BulkFound)),
+			lbl.Render("Files to sync:"), val.Render(formatNumber(m.TotalFiles)),
+		)
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#00BFFF")).
+			Padding(0, 1).
+			Render(body)
+	}
+
 	body := fmt.Sprintf(
 		"%s %s\n%s\n\n%s [%s] %5.1f%%\n%s\n\n  %s %s\n  %s %s\n  %s %s",
 		m.Spinner.View(),

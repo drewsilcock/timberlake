@@ -30,6 +30,11 @@ experimental.
   chunk. S3 verifies each existing multipart part by checksum and re-uploads only
   the missing or altered ones; SFTP verifies the partial's bytes against the
   source before appending, and re-uploads from scratch on any mismatch.
+- **Fast resume** — before transferring, the destination is enumerated in bulk
+  (one S3 `ListObjectsV2` per 1,000 objects instead of a `HeadObject` per file).
+  On a high-latency link this turns a multi-minute reconcile into about a second;
+  measured against Ceph RGW: 6,861 objects in **0.5 s**, versus ~4m21s of
+  per-file checks single-threaded.
 - **S3-compatible** — path-style addressing and checksum handling tuned for
   self-hosted gateways like Ceph RGW.
 - **`s3cmd` config aware** — reads credentials and endpoint from `~/.s3cfg`

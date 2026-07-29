@@ -149,6 +149,40 @@ func (s *SFTP) Stat(_ context.Context, item transfer.Item) (bool, int64, error) 
 	return true, fi.Size(), nil
 }
 
+// StatAll walks the remote root once, so the reconcile phase can answer from
+// memory rather than issuing an Lstat round-trip per file. See
+// transfer.BulkStater.
+func (s *SFTP) StatAll(_ context.Context, limit int, progress func(found int64)) (map[string]int64, bool, error) {
+	found := make(map[string]int64)
+	var n int64
+	walker := s.client.Walk(s.root)
+	for walker.Step() {
+		if err := walker.Err(); err != nil {
+			continue // unreadable entries simply aren't "already there"
+		}
+		info := walker.Stat()
+		if info.IsDir() || !info.Mode().IsRegular() {
+			continue
+		}
+		rel, err := relPath(s.root, walker.Path())
+		if err != nil {
+			continue
+		}
+		found[rel] = info.Size()
+		n++
+		if limit > 0 && len(found) > limit {
+			return nil, false, nil
+		}
+		if progress != nil && n%500 == 0 {
+			progress(n)
+		}
+	}
+	if progress != nil {
+		progress(n)
+	}
+	return found, true, nil
+}
+
 // Put writes the item to the remote, resuming a shorter partial file by append.
 func (s *SFTP) Put(_ context.Context, item transfer.Item, open transfer.OpenFunc, size int64, progress transfer.Progress) error {
 	remote := s.remote(item)

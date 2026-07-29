@@ -318,3 +318,72 @@ func cleanupPrefix(t *testing.T, ctx context.Context, c *s3.Client, bucket, pref
 	}
 	_ = types.CompletedPart{}
 }
+
+// TestStatAllMatchesPerObjectStat: the bulk listing must agree exactly with what
+// per-object Stat reports, since it replaces it during catch-up.
+func TestStatAllMatchesPerObjectStat(t *testing.T) {
+	endpoint, bucket := s3Env(t)
+	ctx := context.Background()
+	prefix := uniquePrefix()
+	raw := rawClient(t, ctx, endpoint)
+	defer cleanupPrefix(t, ctx, raw, bucket, prefix)
+
+	srcDir := t.TempDir()
+	want := transfertest.MakeTree(t, srcDir, 25, 100, 5000)
+
+	src, _ := localfs.New(srcDir)
+	dst := newBackend(t, ctx, endpoint, bucket, prefix, 8)
+	if err := transfertest.Sync(ctx, src, dst); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	known, ok, err := dst.StatAll(ctx, 1_000_000, nil)
+	if err != nil || !ok {
+		t.Fatalf("StatAll: ok=%v err=%v", ok, err)
+	}
+	if len(known) != len(want) {
+		t.Errorf("StatAll returned %d entries, want %d", len(known), len(want))
+	}
+
+	items, err := src.Scan(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		exists, size, err := dst.Stat(ctx, it)
+		if err != nil {
+			t.Fatalf("Stat %s: %v", it.RelativePath, err)
+		}
+		bulkSize, bulkExists := known[it.RelativePath]
+		if exists != bulkExists || size != bulkSize {
+			t.Errorf("%s: Stat(exists=%v size=%d) != StatAll(exists=%v size=%d)",
+				it.RelativePath, exists, size, bulkExists, bulkSize)
+		}
+	}
+}
+
+// TestStatAllRespectsLimit: an over-large listing reports ok=false so the caller
+// falls back rather than caching an unbounded map.
+func TestStatAllRespectsLimit(t *testing.T) {
+	endpoint, bucket := s3Env(t)
+	ctx := context.Background()
+	prefix := uniquePrefix()
+	raw := rawClient(t, ctx, endpoint)
+	defer cleanupPrefix(t, ctx, raw, bucket, prefix)
+
+	srcDir := t.TempDir()
+	transfertest.MakeTree(t, srcDir, 12, 100, 500)
+	src, _ := localfs.New(srcDir)
+	dst := newBackend(t, ctx, endpoint, bucket, prefix, 8)
+	if err := transfertest.Sync(ctx, src, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	known, ok, err := dst.StatAll(ctx, 3, nil) // limit below the object count
+	if err != nil {
+		t.Fatalf("StatAll: %v", err)
+	}
+	if ok || known != nil {
+		t.Errorf("expected ok=false/nil map when over the limit, got ok=%v len=%d", ok, len(known))
+	}
+}

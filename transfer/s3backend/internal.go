@@ -218,6 +218,48 @@ func (s *S3) Scan(ctx context.Context, progress transfer.ScanProgress) ([]transf
 	return items, nil
 }
 
+// StatAll lists every object under the destination prefix, so the reconcile
+// phase can answer "does this already exist?" from memory instead of issuing a
+// HeadObject per file. See transfer.BulkStater.
+func (s *S3) StatAll(ctx context.Context, limit int, progress func(found int64)) (map[string]int64, bool, error) {
+	prefix := ""
+	if s.prefix != "" {
+		prefix = strings.Trim(s.prefix, "/") + "/"
+	}
+
+	found := make(map[string]int64)
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+	var n int64
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("listing s3://%s/%s: %w", s.bucket, prefix, err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			rel := strings.TrimPrefix(*obj.Key, prefix)
+			if rel == "" {
+				continue
+			}
+			found[rel] = aws.ToInt64(obj.Size)
+			n++
+			if limit > 0 && len(found) > limit {
+				// Too big to cache: let the caller fall back to per-item Stat.
+				return nil, false, nil
+			}
+		}
+		if progress != nil {
+			progress(n)
+		}
+	}
+	return found, true, nil
+}
+
 // Open returns an opener that ranged-GETs the object from any offset.
 func (s *S3) Open(ctx context.Context, item transfer.Item) (transfer.OpenFunc, error) {
 	key := s.key(item)

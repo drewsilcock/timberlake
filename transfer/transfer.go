@@ -62,6 +62,22 @@ type Destination interface {
 	Close() error
 }
 
+// BulkStater is an optional Destination capability: enumerating everything the
+// destination already holds in a handful of round-trips, instead of one Stat per
+// item.
+//
+// This matters enormously on high-latency links. Checking 16,000 files with a
+// HeadObject each is 16,000 round-trips; listing the same prefix is ~16 requests
+// (S3 returns 1,000 keys at a time), turning a multi-minute reconcile into a
+// second or two.
+type BulkStater interface {
+	// StatAll returns the existing items keyed by the same relative path Item
+	// uses, along with their sizes. ok is false when the destination holds more
+	// than limit entries — the caller should then fall back to per-item Stat
+	// rather than hold a huge map in memory.
+	StatAll(ctx context.Context, limit int, progress func(found int64)) (found map[string]int64, ok bool, err error)
+}
+
 // Scheme identifies a backend kind.
 type Scheme string
 

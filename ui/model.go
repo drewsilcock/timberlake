@@ -180,6 +180,14 @@ type Model struct {
 	// panel can show what is coming up next.
 	QueuePos int
 
+	// KnownDest is the destination listing gathered up front by a BulkStater.
+	// When set, the reconcile phase answers from it instead of issuing a
+	// per-file round-trip. nil means "fall back to per-item Stat".
+	KnownDest map[string]int64
+	// BulkListing/BulkFound drive the catch-up panel while the listing runs.
+	BulkListing bool
+	BulkFound   int64
+
 	// layout records where panels were drawn so mouse clicks can be hit-tested.
 	// It is a pointer so the value-copied Model shares one instance between
 	// View (which writes it) and Update (which reads it).
@@ -275,6 +283,16 @@ type WorkerStatusMsg struct {
 	Err        string
 	Size       int64
 	QueueIndex int // position in the scan order, for the Queue panel
+}
+
+// BulkStatProgressMsg reports objects seen so far while listing the destination.
+type BulkStatProgressMsg struct{ Found int64 }
+
+// BulkStatCompleteMsg carries the destination listing (nil when unavailable or
+// too large, meaning per-item Stat should be used).
+type BulkStatCompleteMsg struct {
+	Known map[string]int64
+	Found int64
 }
 
 type VerificationCompleteMsg struct {

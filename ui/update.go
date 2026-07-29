@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -43,6 +44,37 @@ func (m *Model) refreshCatchUpETA() {
 		return
 	}
 	m.CatchUpETA = (time.Duration(float64(remaining)/rate) * time.Second).Round(time.Second).String()
+}
+
+const (
+	// bulkStatThreshold is the item count above which a bulk destination
+	// listing is worth its fixed cost; below it, per-item checks are cheaper.
+	bulkStatThreshold = 200
+	// maxBulkEntries caps how much of a destination listing we will hold in
+	// memory before falling back to per-item checks.
+	maxBulkEntries = 2_000_000
+)
+
+// bulkStatCmd lists the destination in the background, reporting progress.
+func bulkStatCmd(ctx context.Context, bs transfer.BulkStater, msgChan chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		var last int64
+		known, ok, err := bs.StatAll(ctx, maxBulkEntries, func(found int64) {
+			if found-last < 1000 {
+				return
+			}
+			last = found
+			select {
+			case msgChan <- BulkStatProgressMsg{Found: found}:
+			default:
+			}
+		})
+		if err != nil || !ok {
+			// Fall back to per-item checks; not fatal.
+			return BulkStatCompleteMsg{Known: nil}
+		}
+		return BulkStatCompleteMsg{Known: known, Found: int64(len(known))}
+	}
 }
 
 // startTunnel launches the quick tunnel and publishes its URL when ready.
@@ -384,10 +416,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Start worker pool. The single message-channel consumer armed in
-		// Init() keeps pumping worker messages from here on — we must not arm
-		// a second one, or two goroutines would race to drain the channel.
+		// Try to enumerate the destination in bulk first: on a high-latency
+		// link this replaces one round-trip per file with a handful of list
+		// requests. Runs as a command so the UI stays responsive.
+		if bs, ok := m.Dest.(transfer.BulkStater); ok && m.TotalFiles >= bulkStatThreshold {
+			m.BulkListing = true
+			cmds = append(cmds, bulkStatCmd(m.Ctx, bs, m.MsgChan))
+		} else {
+			// The single message-channel consumer armed in Init() keeps pumping
+			// worker messages from here on — we must not arm a second one.
+			startWorkerPool(&m)
+		}
+
+	case BulkStatProgressMsg:
+		m.BulkFound = msg.Found
+		cmds = append(cmds, waitForMsgCmd(m.MsgChan))
+
+	case BulkStatCompleteMsg:
+		m.BulkListing = false
+		m.KnownDest = msg.Known
+		m.BulkFound = msg.Found
 		startWorkerPool(&m)
+		cmds = append(cmds, waitForMsgCmd(m.MsgChan))
 
 	case WorkerProgressMsg:
 		if msg.WorkerID >= 0 && msg.WorkerID < len(m.Workers) {
@@ -595,6 +645,7 @@ func startWorkerPool(m *Model) {
 	msgChan := m.MsgChan
 	dryRun := m.Config.DryRun
 	verifyOnly := m.Config.VerifyOnly
+	known := m.KnownDest
 
 	// Transfers are gated separately from workers: every worker can race through
 	// the cheap destination checks (fast catch-up on a resumed run), while only
@@ -620,7 +671,14 @@ func startWorkerPool(m *Model) {
 				// Step 1: skip if the destination already has it at full size.
 				msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Checking", FileName: item.RelativePath, Size: item.Size, QueueIndex: q.index}
 
-				exists, size, err := dest.Stat(ctx, item)
+				var exists bool
+				var size int64
+				var err error
+				if known != nil {
+					size, exists = known[item.RelativePath]
+				} else {
+					exists, size, err = dest.Stat(ctx, item)
+				}
 				if err == nil && exists && size == item.Size {
 					msgChan <- WorkerStatusMsg{WorkerID: workerID, Status: "Skipped", FileName: item.RelativePath, Size: item.Size}
 					continue
