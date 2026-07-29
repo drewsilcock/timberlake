@@ -149,6 +149,7 @@ func (m Model) View() string {
 		top := lipgloss.Height(header)
 		m.layout.sidebarTop = top + 2 // border + "PANELS" heading
 		m.layout.sidebarWidth = sidebarWidth + 2
+		m.layout.contentTop = top + 1 // panel top border
 	}
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, activePanel)
@@ -183,7 +184,8 @@ func (m Model) renderHeader() string {
 // the optional public tunnel.
 func renderWebPane(m Model) string {
 	if m.Web == nil {
-		return ""
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0")).Render(
+			"  The progress page is disabled.\n\n  Start Timberlake without --web=false to serve a\n  read-only page on your LAN and show a QR code here.")
 	}
 	lbl := lipgloss.NewStyle().Foreground(lipgloss.Color("#A0A0A0"))
 	val := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA"))
@@ -203,29 +205,41 @@ func renderWebPane(m Model) string {
 		QuietZone:      1,
 	})
 
-	tunnelLine := lbl.Render("Public link:") + " " + lbl.Render("off — press [w] to share beyond this network")
+	publicURL := ""
+	tunnelLine := lbl.Render("Public link:    ") + " " + lbl.Render("off — press [w] to share beyond this network")
 	if m.Tunnel != nil {
 		switch state, u, err := m.Tunnel.State(); state {
 		case web.TunnelStarting:
-			tunnelLine = lbl.Render("Public link:") + " " + statusPausedStyle.Render("starting…")
+			tunnelLine = lbl.Render("Public link:    ") + " " + statusPausedStyle.Render("starting…")
 		case web.TunnelOn:
-			tunnelLine = lbl.Render("Public link:") + " " + lipgloss.NewStyle().Bold(true).
-				Foreground(lipgloss.Color("#32CD32")).Render(u)
+			publicURL = u
+			tunnelLine = lbl.Render("Public link:    ") + " " + hyperlink(u, lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color("#32CD32")).Underline(true).Render(u))
 		case web.TunnelFailed:
 			msg := "failed"
 			if err != nil {
 				msg = err.Error()
 			}
-			tunnelLine = lbl.Render("Public link:") + " " + statusErrorStyle.Render(msg)
+			tunnelLine = lbl.Render("Public link:    ") + " " + statusErrorStyle.Render(msg)
 		}
 	}
 
+	lanURL := m.Web.LanURL()
 	lines := []string{
 		head.Render("📱 SCAN TO WATCH PROGRESS"),
 		"",
-		lbl.Render("On this network:") + " " + val.Render(m.Web.LanURL()),
+		lbl.Render("On this network:") + " " + hyperlink(lanURL,
+			val.Underline(true).Render(lanURL)),
 		tunnelLine,
 	}
+	// Record where the links landed so a plain click can open them: with mouse
+	// reporting enabled the terminal hands clicks to us, not to its own link
+	// handler.
+	if m.layout != nil {
+		m.layout.lanRow, m.layout.lanURL = 2, lanURL
+		m.layout.pubRow, m.layout.pubURL = 3, publicURL
+	}
+	lines = append(lines, "", lbl.Render("Press [o] to open, or click a link above."))
 	if m.TunnelNote != "" {
 		lines = append(lines, lbl.Render(m.TunnelNote))
 	}
@@ -254,11 +268,8 @@ func renderWebPane(m Model) string {
 	}
 	lines = append(lines, "", strings.TrimRight(qr.String(), "\n"))
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FF69B4")).
-		Padding(0, 1).
-		Render(strings.Join(lines, "\n"))
+	// No border here: this is rendered inside the active panel.
+	return strings.Join(lines, "\n")
 }
 
 // renderWorkerDetail is the full-screen view for a single worker: what it is

@@ -132,6 +132,7 @@ right: **Progress**, **Transfers**, **History**, **Queue** and **Web UI**.
 | `Space` / `Enter` | Show detail for the selected worker (Esc to go back) |
 | `p` | Pause / resume — genuinely stops the workers at the next file boundary |
 | `w` | Start/stop the public Cloudflare quick tunnel |
+| `o` | Open the progress page in your browser |
 | `q` / `Ctrl+C` | Quit |
 
 ### Working on the interface
@@ -155,7 +156,10 @@ TL_UI_DUMP=1 TL_UI_COLS=160 TL_UI_ROWS=50 go test ./ui -run TestDumpUI -v
 
 `--web` (default address `:8765`) serves a self-contained, read-only page that
 streams live progress over a WebSocket, plus a QR code in the TUI to open it on
-your phone. The page lives under an unguessable token path, and every other path
+your phone. The URLs in the **Web UI** panel are real terminal hyperlinks: click
+one to open it (or press `o`). Because Timberlake enables mouse reporting, some
+terminals need Cmd/Ctrl-click for their own link handling — a plain click is
+caught by Timberlake and opens the link anyway. The page lives under an unguessable token path, and every other path
 returns 404.
 
 By default it is reachable only from your LAN. Pressing `w` starts a Cloudflare

@@ -293,6 +293,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end", "G":
 			m.SelectedWorker = len(m.Workers) - 1
 
+		case "o":
+			// Open the progress page in the default browser.
+			if m.Web != nil {
+				target := m.Web.ShareURL()
+				if err := openBrowser(target); err != nil {
+					m.TunnelNote = "Could not open a browser: " + err.Error()
+				} else {
+					m.TunnelNote = "Opening " + target + " …"
+				}
+			}
+
 		case "r":
 			// Toggle the QR / share panel.
 			if m.Web != nil {
@@ -349,6 +360,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.X < m.layout.sidebarWidth {
 				if row := msg.Y - m.layout.sidebarTop; row >= 0 && row < len(allPanes) {
 					m.ActivePane = allPanes[row]
+				}
+			} else if m.ActivePane == PaneWeb {
+				row := msg.Y - m.layout.contentTop + m.Viewport.YOffset
+				switch {
+				case row == m.layout.lanRow && m.layout.lanURL != "":
+					_ = openBrowser(m.layout.lanURL)
+					m.TunnelNote = "Opening " + m.layout.lanURL + " …"
+				case row == m.layout.pubRow && m.layout.pubURL != "":
+					_ = openBrowser(m.layout.pubURL)
+					m.TunnelNote = "Opening " + m.layout.pubURL + " …"
 				}
 			} else if m.ActivePane == PaneTransfers && !m.ZoomWorker {
 				if row := msg.Y - m.layout.sidebarTop + m.Viewport.YOffset; row >= 0 && row < len(m.Workers) {

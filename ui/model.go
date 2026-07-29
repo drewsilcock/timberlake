@@ -44,6 +44,12 @@ type FileError struct {
 type layoutBounds struct {
 	sidebarTop   int
 	sidebarWidth int
+
+	// contentTop is the absolute screen row of the active panel's first content
+	// line; lanRow/pubRow are rows within that content holding clickable links.
+	contentTop     int
+	lanRow, pubRow int
+	lanURL, pubURL string
 }
 
 // FileRecord is one finished item, kept for the history panels.

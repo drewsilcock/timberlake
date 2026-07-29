@@ -9,6 +9,7 @@ import (
 
 	"timberlake/config"
 	"timberlake/transfer"
+	"timberlake/web"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -78,6 +79,12 @@ func demoModel(width, height int) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	// A real (loopback) server so the Web panel renders links and a QR code.
+	srv, err := web.New("127.0.0.1:0")
+	if err == nil {
+		_, _ = srv.Start()
+	}
+
 	return Model{
 		Config: &config.AppConfig{
 			SourceDir: "/Volumes/Elements", Destination: "s3://small-grants-photogrammetry/input-data",
@@ -107,6 +114,7 @@ func demoModel(width, height int) Model {
 		MsgChan:           make(chan tea.Msg, 8),
 		layout:            &layoutBounds{},
 		pause:             newPauseGate(),
+		Web:               srv,
 		Width:             width,
 		Height:            height,
 	}
